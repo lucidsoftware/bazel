@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.remote.blobstore.http;
 
-import com.google.auth.Credentials;
 import com.google.devtools.build.lib.remote.blobstore.SimpleBlobStore;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
@@ -49,11 +48,9 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
 import javax.net.ssl.SSLEngine;
 
 /**
@@ -85,21 +82,15 @@ public final class HttpBlobStore implements SimpleBlobStore {
   private static final Pattern INVALID_TOKEN_ERROR =
       Pattern.compile("\\s*error\\s*=\\s*\"?invalid_token\"?");
 
+  private final HttpCredentialsAdapter creds;
   private final NioEventLoopGroup eventLoop = new NioEventLoopGroup(2 /* number of threads */);
   private final ChannelPool downloadChannels;
   private final ChannelPool uploadChannels;
   private final URI uri;
 
-  private final Object credentialsLock = new Object();
-
-  @GuardedBy("credentialsLock")
-  private final Credentials creds;
-
-  @GuardedBy("credentialsLock")
-  private long lastRefreshTime;
-
-  public HttpBlobStore(URI uri, int timeoutMillis, @Nullable final Credentials creds)
+  public HttpBlobStore(URI uri, int timeoutMillis, @Nullable final HttpCredentialsAdapter creds)
       throws Exception {
+
     boolean useTls = uri.getScheme().equals("https");
     if (uri.getPort() == -1) {
       int port = useTls ? 443 : 80;
@@ -240,7 +231,7 @@ public final class HttpBlobStore implements SimpleBlobStore {
         HttpResponse response = ((HttpException) e).response();
         if (!dataWritten.get() && authTokenExpired(response)) {
           // The error is due to an auth token having expired. Let's try again.
-          refreshCredentials();
+          creds.refreshCredentials();
           return getAfterCredentialRefresh(download);
         }
         if (cacheMiss(response.status())) {
@@ -314,7 +305,7 @@ public final class HttpBlobStore implements SimpleBlobStore {
       if (e instanceof HttpException) {
         HttpResponse response = ((HttpException) e).response();
         if (authTokenExpired(response)) {
-          refreshCredentials();
+          creds.refreshCredentials();
           // The error is due to an auth token having expired. Let's try again.
           if (!reset(in)) {
             // The InputStream can't be reset and thus we can't retry as most likely
@@ -389,10 +380,8 @@ public final class HttpBlobStore implements SimpleBlobStore {
 
   /** See https://tools.ietf.org/html/rfc6750#section-3.1 */
   private boolean authTokenExpired(HttpResponse response) {
-    synchronized (credentialsLock) {
-      if (creds == null) {
-        return false;
-      }
+    if (creds == null) {
+      return false;
     }
     List<String> values = response.headers().getAllAsString(HttpHeaderNames.WWW_AUTHENTICATE);
     String value = String.join(",", values);
@@ -421,17 +410,4 @@ public final class HttpBlobStore implements SimpleBlobStore {
     }
   }
 
-  private void refreshCredentials() throws IOException {
-    synchronized (credentialsLock) {
-      long now = System.currentTimeMillis();
-      // Call creds.refresh() at most once per second. The one second was arbitrarily chosen, as
-      // a small enough value that we don't expect to interfere with actual token lifetimes, but
-      // it should just make sure that potentially hundreds of threads don't call this method
-      // at the same time.
-      if ((now - lastRefreshTime) > TimeUnit.SECONDS.toMillis(1)) {
-        lastRefreshTime = now;
-        creds.refresh();
-      }
-    }
-  }
 }

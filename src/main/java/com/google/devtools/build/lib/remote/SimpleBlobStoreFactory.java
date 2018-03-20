@@ -16,10 +16,15 @@ package com.google.devtools.build.lib.remote;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
+import com.amazonaws.auth.AWSCredentialsProvider;
 import com.google.auth.Credentials;
+import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.AwsAuthUtils;
+import com.google.devtools.build.lib.authandtls.GoogleAuthUtils;
 import com.google.devtools.build.lib.remote.blobstore.OnDiskBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.SimpleBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.http.HttpBlobStore;
+import com.google.devtools.build.lib.remote.blobstore.http.HttpCredentialsAdapter;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
 import java.net.URI;
@@ -32,17 +37,34 @@ import javax.annotation.Nullable;
  */
 public final class SimpleBlobStoreFactory {
 
+  private static final String S3_SERVICE = "s3";
+
   private SimpleBlobStoreFactory() {}
 
-  public static SimpleBlobStore createRest(RemoteOptions options, Credentials creds)
+  public static SimpleBlobStore createRest(RemoteOptions options, AuthAndTLSOptions authAndTLSOptions)
       throws IOException {
     try {
       return new HttpBlobStore(
           URI.create(options.remoteHttpCache),
           (int) TimeUnit.SECONDS.toMillis(options.remoteTimeout),
-          creds);
+          createHttpCredentialsAdapter(options, authAndTLSOptions));
     } catch (Exception e) {
       throw new RuntimeException(e);
+    }
+  }
+
+  private static HttpCredentialsAdapter createHttpCredentialsAdapter(final RemoteOptions options, final AuthAndTLSOptions authAndTLSOptions) throws IOException {
+    final Credentials googlAuth = GoogleAuthUtils.newCredentials(authAndTLSOptions);
+    final AWSCredentialsProvider awsAuth = AwsAuthUtils.newCredentials(authAndTLSOptions);
+
+    if (googlAuth != null && awsAuth != null) {
+      throw new IOException("Both google and AWS credentials provided for remote caching. Only one should be used");
+    } else if (googlAuth != null) {
+      return HttpCredentialsAdapter.fromGoogleCredentials(googlAuth);
+    } else if (awsAuth != null) {
+      return HttpCredentialsAdapter.fromAwsCredentails(options.awsS3Region, options.remoteHttpCache, S3_SERVICE, awsAuth);
+    } else {
+      return null;
     }
   }
 
@@ -53,10 +75,10 @@ public final class SimpleBlobStoreFactory {
   }
 
   public static SimpleBlobStore create(
-      RemoteOptions options, @Nullable Credentials creds, @Nullable Path workingDirectory)
+          RemoteOptions options, @Nullable AuthAndTLSOptions authAndTLSOptions, @Nullable Path workingDirectory)
       throws IOException {
     if (isRestUrlOptions(options)) {
-      return createRest(options, creds);
+      return createRest(options, authAndTLSOptions);
     }
     if (workingDirectory != null && isLocalDiskCache(options)) {
       return createLocalDisk(options, workingDirectory);

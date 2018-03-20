@@ -15,7 +15,6 @@ package com.google.devtools.build.lib.remote.blobstore.http;
 
 import static com.google.common.base.Preconditions.checkState;
 
-import com.google.auth.Credentials;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -45,7 +44,7 @@ final class HttpDownloadHandler extends AbstractHttpHandler<HttpObject> {
   private boolean downloadSucceeded;
   private HttpResponse response;
 
-  public HttpDownloadHandler(Credentials credentials) {
+  public HttpDownloadHandler(HttpCredentialsAdapter credentials) {
     super(credentials);
   }
 
@@ -129,7 +128,6 @@ final class HttpDownloadHandler extends AbstractHttpHandler<HttpObject> {
     }
     out = ((DownloadCommand) msg).out();
     HttpRequest request = buildRequest((DownloadCommand) msg);
-    addCredentialHeaders(request, ((DownloadCommand) msg).uri());
     ctx.writeAndFlush(request)
         .addListener(
             (f) -> {
@@ -139,7 +137,7 @@ final class HttpDownloadHandler extends AbstractHttpHandler<HttpObject> {
             });
   }
 
-  private HttpRequest buildRequest(DownloadCommand request) {
+  private HttpRequest buildRequest(DownloadCommand request) throws IOException {
     HttpRequest httpRequest =
         new DefaultFullHttpRequest(
             HttpVersion.HTTP_1_1,
@@ -148,6 +146,7 @@ final class HttpDownloadHandler extends AbstractHttpHandler<HttpObject> {
     httpRequest.headers().set(HttpHeaderNames.HOST, constructHost(request.uri()));
     httpRequest.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
     httpRequest.headers().set(HttpHeaderNames.ACCEPT, "*/*");
+    addCredentialHeaders(httpRequest, request.uri());
     return httpRequest;
   }
 
