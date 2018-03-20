@@ -18,6 +18,7 @@ make builds significantly faster.
     * [nginx](#nginx)
     * [Bazel Remote Cache](#bazel-remote-cache)
     * [Google Cloud Storage](#google-cloud-storage)
+    * [AWS S3 Buckets](#aws-s3-buckets)
     * [Other servers](#other-servers)
 * [Authentication](#authentication)
 * [HTTP Caching Protocol](#http-caching-protocol)
@@ -99,6 +100,7 @@ include:
 * [nginx](#nginx)
 * [Bazel Remote Cache](#bazel-remote-cache)
 * [Google Cloud Storage](#google-cloud-storage)
+* [AWS S3 Buckets](#aws-s3-buckets)
 
 ### nginx
 
@@ -170,6 +172,48 @@ to/from your GCS bucket.
 
 5. You can configure Cloud Storage to automatically delete old files. To do so, see
 [Managing Object Lifecycles](https://cloud.google.com/storage/docs/managing-lifecycles).
+
+### AWS S3 Storage
+
+[AWS S3] is a fully managed object store which provides an
+HTTP API that is compatible with Bazel's remote caching protocol. It requires
+that you have an AWS account.
+
+To use S3 as the cache:
+
+1. [Create a bucket](https://docs.aws.amazon.com/AmazonS3/latest/gsg/CreatingABucket.html).
+Ensure that you select a bucket location that's closest to you, as network bandwidth
+is important for the remote cache.
+
+2. Generate relevant auth tokens and then pass it to Bazel for authentication. Store
+the key securely, as anyone with the key can read and write arbitrary data
+to/from your S3 bucket.
+
+3. Connect to S3 by adding the following flags to your Bazel command:
+   * Pass the following URL to Bazel by using the flag: `--remote_http_cache=https://bucket-name.s3-website-region.amazonaws.com`
+     where `bucket-name` is the name of your storage bucket, and `region` is the name of the chosen region.
+     You will need to use the HTTP/HTTPS url that points to your bucket. Presently `s3://` style urls are _not_
+     supported due to a lack of any consistent standard.
+   * Pass the authentication key using the flags:
+     `--aws_access_key_id=$ACCESS_KEY`
+     `--aws_secret_access_key=$SECRET_KEY`
+     Alternatively, AWS credentials can configured using standard methods such as instance roles, environment variables
+     or similar.
+
+4. You can configure S3 to automatically delete old files. To do so, see
+[Object Lifecycle Management](https://docs.aws.amazon.com/AmazonS3/latest/dev/object-lifecycle-mgmt.html)
+
+#### Virtual hosted and accelerated buckets
+
+Buckets that have been configured under a virtual host name, or are using the s3
+cloudfront acceleration proxy require some additional configuration.
+
+These buckets cannot determine the region that should be used from the URL alone.
+to specify the region for these buckets directly use the `--aws_region=$AWS_REGION` flag.
+
+For those using s3 accelerated buckets, the remote http cache url will be of the following form:
+`--remote_http_cache=https://bucket-name.s3-accelerate.amazonaws.com`
+where `bucket-name` is the name of the bucket to use.
 
 ### Other servers
 
