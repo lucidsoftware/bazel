@@ -242,7 +242,7 @@ public class HttpBlobStoreTest {
   }
 
   private HttpBlobStore createHttpBlobStore(ServerChannel serverChannel, int timeoutMillis,
-      int remoteMaxConnections, @Nullable final Credentials creds) throws Exception {
+      int remoteMaxConnections, @Nullable final HttpCredentialsAdapter creds) throws Exception {
     SocketAddress socketAddress = serverChannel.localAddress();
     if (socketAddress instanceof DomainSocketAddress) {
       DomainSocketAddress domainSocketAddress = (DomainSocketAddress) socketAddress;
@@ -415,7 +415,17 @@ public class HttpBlobStoreTest {
         })
         .when(credentials)
         .refresh();
-    return HttpCredentialsAdapter.fromGoogleCredentials(credentials);
+
+    HttpCredentialsAdapter credentialsAdapter = Mockito.spy(HttpCredentialsAdapter.class);
+
+    Mockito.doAnswer(
+        (mock) -> {
+          credentials.refresh();
+          return null;
+        })
+        .when(credentialsAdapter)
+        .refreshCredentials();
+    return credentialsAdapter;
   }
 
   /**
