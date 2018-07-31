@@ -63,7 +63,7 @@ public class AuthAndTLSOptions extends OptionsBase {
 
   @Option(
     name = "aws_default_credentials",
-    defaultValue = "true",
+    defaultValue = "false",
     category = "remote",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
