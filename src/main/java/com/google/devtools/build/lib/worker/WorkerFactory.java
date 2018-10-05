@@ -59,9 +59,12 @@ final class WorkerFactory extends BaseKeyedPooledObjectFactory<WorkerKey, Worker
 
     Worker worker;
     boolean sandboxed = workerOptions.workerSandboxing || key.mustBeSandboxed();
+    boolean proxyed = key.proxyed();
     if (sandboxed) {
       Path workDir = getSandboxedWorkerPath(key, workerId);
       worker = new SandboxedWorker(key, workerId, workDir, logFile);
+    } else if (proxyed) {
+      worker = new WorkerProxy(key, workerId, key.getExecRoot(), logFile);
     } else {
       worker = new Worker(key, workerId, key.getExecRoot(), logFile);
     }
