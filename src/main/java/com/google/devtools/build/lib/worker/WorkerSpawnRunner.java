@@ -108,8 +108,10 @@ final class WorkerSpawnRunner implements SpawnRunner {
   @Override
   public SpawnResult exec(Spawn spawn, SpawnExecutionContext context)
       throws ExecException, IOException, InterruptedException {
-    if (!spawn.getExecutionInfo().containsKey(ExecutionRequirements.SUPPORTS_WORKERS)
-        || !spawn.getExecutionInfo().get(ExecutionRequirements.SUPPORTS_WORKERS).equals("1")) {
+    if ((!spawn.getExecutionInfo().containsKey(ExecutionRequirements.SUPPORTS_WORKERS)
+        || !spawn.getExecutionInfo().get(ExecutionRequirements.SUPPORTS_WORKERS).equals("1"))
+        && (!spawn.getExecutionInfo().containsKey(ExecutionRequirements.SUPPORTS_MULTIPLEX_WORKERS)
+        || !spawn.getExecutionInfo().get(ExecutionRequirements.SUPPORTS_MULTIPLEX_WORKERS).equals("1"))) {
       // TODO(ulfjack): Don't circumvent SpawnExecutionPolicy. Either drop the warning here, or
       // provide a mechanism in SpawnExecutionPolicy to report warnings.
       reporter.handle(
@@ -152,6 +154,8 @@ final class WorkerSpawnRunner implements SpawnRunner {
             spawn, context, execRoot, sandboxUsesExpandedTreeArtifactsInRunfiles);
     SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
 
+    boolean proxyed = spawn.getExecutionInfo().getOrDefault(ExecutionRequirements.SUPPORTS_MULTIPLEX_WORKERS, "0").equals("1");
+
     WorkerKey key =
         new WorkerKey(
             workerArgs,
@@ -160,7 +164,8 @@ final class WorkerSpawnRunner implements SpawnRunner {
             spawn.getMnemonic(),
             workerFilesCombinedHash,
             workerFiles,
-            context.speculating());
+            context.speculating(),
+            proxyed);
 
     WorkRequest workRequest = createWorkRequest(spawn, context, flagFiles, inputFileCache);
 
@@ -287,6 +292,7 @@ final class WorkerSpawnRunner implements SpawnRunner {
     try {
       try {
         worker = workers.borrowObject(key);
+        request = request.toBuilder().setRequestId(worker.getWorkerId()).build();
       } catch (IOException e) {
         throw new UserExecException(
             ErrorMessage.builder()
