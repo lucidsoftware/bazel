@@ -48,7 +48,8 @@ public class WorkerFactoryTest {
             "dummy",
             HashCode.fromInt(0),
             ImmutableSortedMap.of(),
-            true);
+            true,
+            false);
     Path sandboxedWorkerPath = workerFactory.getSandboxedWorkerPath(workerKey, 1);
 
     assertThat(sandboxedWorkerPath.getBaseName()).isEqualTo("workspace");
