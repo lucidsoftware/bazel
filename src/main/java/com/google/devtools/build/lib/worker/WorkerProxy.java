@@ -86,8 +86,8 @@ final class WorkerProxy extends Worker {
     byte[] requestBytes = request.toByteArray();
     request.reset();
     try {
-      workerMultiplexer.putRequest(requestBytes);
       workerMultiplexer.setResponseMap(workerId);
+      workerMultiplexer.putRequest(requestBytes);
       return workerMultiplexer.getResponse(workerId);
     } catch (Exception e) {
       e.printStackTrace();
