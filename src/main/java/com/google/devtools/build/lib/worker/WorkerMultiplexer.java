@@ -37,9 +37,11 @@ public class WorkerMultiplexer extends Thread {
     private static Semaphore semInstanceMap = new Semaphore(1);
     private static Map<Integer, WorkerMultiplexer> instanceMap = new HashMap<>();
     private Map<Integer, InputStream> responseMap;
-    private Map<Integer, Semaphore> semResponseNotEmpty;
+    private Map<Integer, Semaphore> semResponseMapNotEmpty;
     private Semaphore semResponseMap;
+    private Semaphore semResponseNotEmpty;
     private Semaphore semAccessProcess;
+    private Semaphore toPrint;
 
     private Subprocess process;
     private Integer workerHash;
@@ -49,7 +51,9 @@ public class WorkerMultiplexer extends Thread {
     WorkerMultiplexer(Integer workerHash) {
         semAccessProcess = new Semaphore(1);
         semResponseMap = new Semaphore(1);
-        semResponseNotEmpty = new HashMap<>();
+        semResponseNotEmpty = new Semaphore(1);
+        toPrint = new Semaphore(1);
+        semResponseMapNotEmpty = new HashMap<>();
         responseMap = new HashMap<>();
         this.workerHash = workerHash;
 
@@ -171,11 +175,37 @@ public class WorkerMultiplexer extends Thread {
         stdin.flush();
     }
 
-    public InputStream getResponse(int workerId) throws Exception {
+    public InputStream getResponse(int workerId, byte[] request) throws Exception {
+        Semaphore waitForResponse;
         try {
-            semResponseNotEmpty.get(workerId).acquire();
+            semResponseNotEmpty.acquire();
+            waitForResponse = semResponseMapNotEmpty.get(workerId);
         } catch (InterruptedException e) {
             throw e;
+        } finally {
+            semResponseNotEmpty.release();
+        }
+        try {
+            toPrint.acquire();
+            InputStream targetStream = new ByteArrayInputStream(request);
+            System.out.println("WAIT ON ID: " + workerId);
+            System.out.println(WorkerProtocol.WorkRequest.parseDelimitedFrom(targetStream).getInputsList().get(0));
+            System.out.println(waitForResponse.toString());
+        } catch (InterruptedException e) {
+            throw e;
+        } finally {
+            toPrint.release();
+        }
+        waitForResponse.acquire();
+        try {
+            toPrint.acquire();
+            InputStream targetStream = new ByteArrayInputStream(request);
+            System.out.println("GET SEM ON ID: " + workerId);
+            System.out.println(WorkerProtocol.WorkRequest.parseDelimitedFrom(targetStream).getInputsList().get(0));
+        } catch (InterruptedException e) {
+            throw e;
+        } finally {
+            toPrint.release();
         }
         try {
             semResponseMap.acquire();
@@ -188,8 +218,29 @@ public class WorkerMultiplexer extends Thread {
         }
     }
 
-    public synchronized void setResponseMap(int workerId) {
-        semResponseNotEmpty.put(workerId, new Semaphore(0));
+    public void setResponseMap(int workerId, byte[] request) throws InterruptedException, IOException {
+        try {
+            semResponseNotEmpty.acquire();
+            semResponseMapNotEmpty.put(workerId, new Semaphore(0));
+
+            try {
+                toPrint.acquire();
+                InputStream targetStream = new ByteArrayInputStream(request);
+                System.out.println("NEW SEM");
+                Semaphore tempSem = semResponseMapNotEmpty.get(workerId);
+                System.out.println(tempSem.toString());
+                System.out.println(WorkerProtocol.WorkRequest.parseDelimitedFrom(targetStream).getInputsList().get(0));
+            } catch (InterruptedException e) {
+                throw e;
+            } finally {
+                toPrint.release();
+            }
+
+        } catch (InterruptedException e) {
+            throw e;
+        } finally {
+            semResponseNotEmpty.release();
+        }
     }
 
     public void waitRequest() throws InterruptedException, IOException {
@@ -202,6 +253,16 @@ public class WorkerMultiplexer extends Thread {
             throw e;
         }
 
+        try {
+            toPrint.acquire();
+            System.out.println("BACK FROM ANNEX");
+            System.out.println(parsedResponse.getOutput());
+        } catch (InterruptedException e) {
+            throw e;
+        } finally {
+            toPrint.release();
+        }
+
         if (parsedResponse == null) return;
 
         int workerId = parsedResponse.getRequestId();
@@ -210,11 +271,27 @@ public class WorkerMultiplexer extends Thread {
 
         try {
             semResponseMap.acquire();
+            semResponseNotEmpty.acquire();
             responseMap.put(workerId, new ByteArrayInputStream(tempOs.toByteArray()));
-            semResponseNotEmpty.get(workerId).release();
+            
+            try {
+                toPrint.acquire();
+                System.out.println("HOW MANY SEM");
+                Semaphore tempSem = semResponseMapNotEmpty.get(workerId);
+                System.out.println(tempSem.toString());
+                tempSem.release();
+                System.out.println(parsedResponse.getOutput());
+                System.out.println(tempSem.availablePermits());
+            } catch (InterruptedException e) {
+                throw e;
+            } finally {
+                toPrint.release();
+            }
+
         } catch (InterruptedException e) {
             throw e;
         } finally {
+            semResponseNotEmpty.release();
             semResponseMap.release();
         }
     }
@@ -224,8 +301,7 @@ public class WorkerMultiplexer extends Thread {
             try {
                 waitRequest();
             } catch (Exception e) {
-                System.out.println("Receiver killed");
-                // Terminate the thread
+                e.printStackTrace();
             }
         }
     }
