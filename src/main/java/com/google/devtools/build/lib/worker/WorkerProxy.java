@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.worker;
 import com.google.devtools.build.lib.sandbox.SandboxHelpers;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -91,7 +92,7 @@ final class WorkerProxy extends Worker {
       return workerMultiplexer.getResponse(workerId);
     } catch (Exception e) {
       e.printStackTrace();
-      return null;
+      return new ByteArrayInputStream(new byte[0]);
     }
   }
 

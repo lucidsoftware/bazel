@@ -184,7 +184,12 @@ public class WorkerMultiplexer extends Thread {
             semResponseChecker.release();
         }
 
-        waitForResponse.acquire();
+        try {
+            waitForResponse.acquire();
+        } catch (InterruptedException e) {
+            // Return empty InputStream if there is a compilation error
+            return new ByteArrayInputStream(new byte[0]);
+        }
 
         try {
             semResponseMap.acquire();
