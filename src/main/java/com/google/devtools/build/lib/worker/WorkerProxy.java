@@ -66,9 +66,9 @@ final class WorkerProxy extends Worker {
 
   @Override
   public void prepareExecution(
-          Map<PathFragment, Path> inputFiles, SandboxHelpers.SandboxOutputs outputs, Set<PathFragment> workerFiles)
-          throws IOException {
-      createProcess();
+      Map<PathFragment, Path> inputFiles, SandboxHelpers.SandboxOutputs outputs, Set<PathFragment> workerFiles)
+      throws IOException {
+    createProcess();
   }
 
   @Override
@@ -82,6 +82,9 @@ final class WorkerProxy extends Worker {
     workerMultiplexer.destroyMultiplexer();
   }
 
+  /**
+   * Reset the responseMap, pass the WorkRequest to worker process, and wait for WorkResponse.
+   */
   @Override
   InputStream getInputStream() {
     byte[] requestBytes = request.toByteArray();

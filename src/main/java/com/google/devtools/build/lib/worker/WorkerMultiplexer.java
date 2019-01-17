@@ -34,227 +34,250 @@ import java.util.concurrent.Semaphore;
  * An intermediate worker that receives response from the worker processes
  */
 public class WorkerMultiplexer extends Thread {
-    private static Semaphore semInstanceMap = new Semaphore(1);
-    private static Map<Integer, WorkerMultiplexer> instanceMap = new HashMap<>();
-    private Map<Integer, InputStream> responseMap;
-    private Map<Integer, Semaphore> responseChecker;
-    private Semaphore semResponseMap;
-    private Semaphore semResponseChecker;
-    private Semaphore semAccessProcess;
+  private static Semaphore semInstanceMap = new Semaphore(1);
+  private static Map<Integer, WorkerMultiplexer> instanceMap = new HashMap<>();
+  private Map<Integer, InputStream> responseMap;
+  private Map<Integer, Semaphore> responseChecker;
+  private Semaphore semResponseMap;
+  private Semaphore semResponseChecker;
+  private Semaphore semAccessProcess;
 
-    private Subprocess process;
-    private Integer workerHash;
+  private Subprocess process;
+  private Integer workerHash;
 
-    private Thread shutdownHook;
+  private Thread shutdownHook;
 
-    WorkerMultiplexer(Integer workerHash) {
-        semAccessProcess = new Semaphore(1);
-        semResponseMap = new Semaphore(1);
-        semResponseChecker = new Semaphore(1);
-        responseChecker = new HashMap<>();
-        responseMap = new HashMap<>();
-        this.workerHash = workerHash;
+  WorkerMultiplexer(Integer workerHash) {
+    semAccessProcess = new Semaphore(1);
+    semResponseMap = new Semaphore(1);
+    semResponseChecker = new Semaphore(1);
+    responseChecker = new HashMap<>();
+    responseMap = new HashMap<>();
+    this.workerHash = workerHash;
 
-        final WorkerMultiplexer self = this;
-        this.shutdownHook =
-            new Thread(
-                () -> {
-                    try {
-                        self.shutdownHook = null;
-                        self.destroyMultiplexer();
-                    } finally {
-                        // We can't do anything here.
-                    }
-                });
-        Runtime.getRuntime().addShutdownHook(shutdownHook);
+    final WorkerMultiplexer self = this;
+    this.shutdownHook =
+      new Thread(
+        () -> {
+          try {
+            self.shutdownHook = null;
+            self.destroyMultiplexer();
+          } finally {
+            // We can't do anything here.
+          }
+        });
+    Runtime.getRuntime().addShutdownHook(shutdownHook);
+  }
+
+  /**
+   * Returns a WorkerMultiplexer instance to WorkerProxy. WorkerProxys with the
+   * same workerHash talk to the same WorkerMultiplexer.
+   */
+  public synchronized static WorkerMultiplexer getInstance(Integer workerHash) {
+    try {
+      semInstanceMap.acquire();
+      if (!instanceMap.containsKey(workerHash)) {
+        instanceMap.put(workerHash, new WorkerMultiplexer(workerHash));
+      }
+      WorkerMultiplexer receiver = instanceMap.get(workerHash);
+      return receiver;
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+      return null;
+    } finally {
+      semInstanceMap.release();
+    }
+  }
+
+  /**
+   * Only start one worker process for each WorkerMultiplexer, if it hasn't.
+   */
+  public synchronized void createProcess(WorkerKey workerKey, Path workDir, Path logFile) throws IOException {
+    try {
+      semAccessProcess.acquire();
+      if (this.process == null || this.process.finished()) {
+        List<String> args = workerKey.getArgs();
+        File executable = new File(args.get(0));
+        if (!executable.isAbsolute() && executable.getParent() != null) {
+          args = new ArrayList<>(args);
+          args.set(0, new File(workDir.getPathFile(), args.get(0)).getAbsolutePath());
+        }
+        SubprocessBuilder processBuilder = new SubprocessBuilder();
+        processBuilder.setArgv(args);
+        processBuilder.setWorkingDirectory(workDir.getPathFile());
+        processBuilder.setStderr(logFile.getPathFile());
+        processBuilder.setEnv(workerKey.getEnv());
+        this.process = processBuilder.start();
+      }
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    } finally {
+      semAccessProcess.release();
+    }
+    if (!this.isAlive()) {
+      this.start();
+    }
+  }
+
+  synchronized void destroyMultiplexer() {
+    if (shutdownHook != null) {
+      Runtime.getRuntime().removeShutdownHook(shutdownHook);
+    }
+    try {
+      semInstanceMap.acquire();
+      instanceMap.remove(workerHash);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    } finally {
+      semInstanceMap.release();
+    }
+    try {
+      semAccessProcess.acquire();
+      if (this.process != null) {
+        destroyProcess(this.process);
+      }
+      semAccessProcess.release();
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
+  }
+
+  private static void destroyProcess(Subprocess process) {
+    boolean wasInterrupted = false;
+    try {
+      process.destroy();
+      while (true) {
+        try {
+          process.waitFor();
+          return;
+        } catch (InterruptedException ie) {
+          wasInterrupted = true;
+        }
+      }
+    } finally {
+      // Read this for detailed explanation: http://www.ibm.com/developerworks/library/j-jtp05236/
+      if (wasInterrupted) {
+        Thread.currentThread().interrupt(); // preserve interrupted status
+      }
+    }
+  }
+
+  public boolean isProcessAlive() {
+    try {
+      semAccessProcess.acquire();
+      return !this.process.finished();
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+      return false;
+    } finally {
+      semAccessProcess.release();
+    }
+  }
+
+  /**
+   * Pass the WorkRequest to worker process.
+   */
+  public synchronized void putRequest(byte[] request) throws IOException {
+    OutputStream stdin = process.getOutputStream();
+    stdin.write(request);
+    stdin.flush();
+  }
+
+  /**
+   * A WorkerProxy waits on a semaphore for the WorkResponse returned from worker process.
+   */
+  public InputStream getResponse(int workerId) throws InterruptedException {
+    Semaphore waitForResponse;
+    try {
+      semResponseChecker.acquire();
+      waitForResponse = responseChecker.get(workerId);
+    } catch (InterruptedException e) {
+      throw e;
+    } finally {
+      semResponseChecker.release();
     }
 
-    public synchronized static WorkerMultiplexer getInstance(Integer workerHash) {
-        try {
-            semInstanceMap.acquire();
-            if (!instanceMap.containsKey(workerHash)) {
-                instanceMap.put(workerHash, new WorkerMultiplexer(workerHash));
-            }
-            WorkerMultiplexer receiver = instanceMap.get(workerHash);
-            return receiver;
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-            return null;
-        } finally {
-            semInstanceMap.release();
-        }
+    try {
+      waitForResponse.acquire();
+    } catch (InterruptedException e) {
+      // Return empty InputStream if there is a compilation error.
+      return new ByteArrayInputStream(new byte[0]);
     }
 
-    public synchronized void createProcess(WorkerKey workerKey, Path workDir, Path logFile) throws IOException {
-        try {
-            semAccessProcess.acquire();
-            if (this.process == null || this.process.finished()) {
-                List<String> args = workerKey.getArgs();
-                File executable = new File(args.get(0));
-                if (!executable.isAbsolute() && executable.getParent() != null) {
-                    args = new ArrayList<>(args);
-                    args.set(0, new File(workDir.getPathFile(), args.get(0)).getAbsolutePath());
-                }
-                SubprocessBuilder processBuilder = new SubprocessBuilder();
-                processBuilder.setArgv(args);
-                processBuilder.setWorkingDirectory(workDir.getPathFile());
-                processBuilder.setStderr(logFile.getPathFile());
-                processBuilder.setEnv(workerKey.getEnv());
-                this.process = processBuilder.start();
-            }
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        } finally {
-            semAccessProcess.release();
-        }
-        if (!this.isAlive()) {
-            this.start();
-        }
+    try {
+      semResponseMap.acquire();
+      InputStream response = responseMap.get(workerId);
+      return response;
+    } catch (InterruptedException e) {
+      throw e;
+    } finally {
+      semResponseMap.release();
+    }
+  }
+
+  /**
+   * Reset the map that indicates if the WorkResponses have been returned.
+   */
+  public void setResponseMap(int workerId) throws InterruptedException {
+    try {
+      semResponseChecker.acquire();
+      responseChecker.put(workerId, new Semaphore(0));
+    } catch (InterruptedException e) {
+      throw e;
+    } finally {
+      semResponseChecker.release();
+    }
+  }
+
+  /**
+   * When it gets a WorkResponse from worker process, put that WorkResponse to
+   * responseMap and signal responseChecker.
+   */
+  public void waitRequest() throws InterruptedException, IOException {
+    InputStream stdout = process.getInputStream();
+
+    WorkResponse parsedResponse;
+    try {
+      parsedResponse = WorkResponse.parseDelimitedFrom(stdout);
+    } catch (IOException e) {
+      throw e;
     }
 
-    synchronized void destroyMultiplexer() {
-        if (shutdownHook != null) {
-            Runtime.getRuntime().removeShutdownHook(shutdownHook);
-        }
-        try {
-            semInstanceMap.acquire();
-            instanceMap.remove(workerHash);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        } finally {
-            semInstanceMap.release();
-        }
-        try {
-            semAccessProcess.acquire();
-            if (this.process != null) {
-                destroyProcess(this.process);
-            }
-            semAccessProcess.release();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
+    if (parsedResponse == null) return;
+
+    int workerId = parsedResponse.getRequestId();
+    ByteArrayOutputStream tempOs = new ByteArrayOutputStream();
+    parsedResponse.writeDelimitedTo(tempOs);
+
+    try {
+      semResponseMap.acquire();
+      responseMap.put(workerId, new ByteArrayInputStream(tempOs.toByteArray()));
+    } catch (InterruptedException e) {
+      throw e;
+    } finally {
+      semResponseMap.release();
     }
 
-    private static void destroyProcess(Subprocess process) {
-        boolean wasInterrupted = false;
-        try {
-            process.destroy();
-            while (true) {
-                try {
-                    process.waitFor();
-                    return;
-                } catch (InterruptedException ie) {
-                    wasInterrupted = true;
-                }
-            }
-        } finally {
-            // Read this for detailed explanation: http://www.ibm.com/developerworks/library/j-jtp05236/
-            if (wasInterrupted) {
-                Thread.currentThread().interrupt(); // preserve interrupted status
-            }
-        }
+    try {
+      semResponseChecker.acquire();
+      responseChecker.get(workerId).release();
+    } catch (InterruptedException e) {
+      throw e;
+    } finally {
+      semResponseChecker.release();
     }
+  }
 
-    public boolean isProcessAlive() {
-        try {
-            semAccessProcess.acquire();
-            return !this.process.finished();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-            return false;
-        } finally {
-            semAccessProcess.release();
-        }
+  /**
+   * A multiplexer thread that listens to the WorkResponses from worker process.
+   */
+  public void run() {
+    while (!this.interrupted()) {
+      try {
+        waitRequest();
+      } catch (Exception e) {
+        e.printStackTrace();
+      }
     }
-
-    public synchronized void putRequest(byte[] request) throws IOException {
-        OutputStream stdin = process.getOutputStream();
-        stdin.write(request);
-        stdin.flush();
-    }
-
-    public InputStream getResponse(int workerId) throws InterruptedException {
-        Semaphore waitForResponse;
-        try {
-            semResponseChecker.acquire();
-            waitForResponse = responseChecker.get(workerId);
-        } catch (InterruptedException e) {
-            throw e;
-        } finally {
-            semResponseChecker.release();
-        }
-
-        try {
-            waitForResponse.acquire();
-        } catch (InterruptedException e) {
-            // Return empty InputStream if there is a compilation error
-            return new ByteArrayInputStream(new byte[0]);
-        }
-
-        try {
-            semResponseMap.acquire();
-            InputStream response = responseMap.get(workerId);
-            return response;
-        } catch (InterruptedException e) {
-            throw e;
-        } finally {
-            semResponseMap.release();
-        }
-    }
-
-    public void setResponseMap(int workerId) throws InterruptedException {
-        try {
-            semResponseChecker.acquire();
-            responseChecker.put(workerId, new Semaphore(0));
-        } catch (InterruptedException e) {
-            throw e;
-        } finally {
-            semResponseChecker.release();
-        }
-    }
-
-    public void waitRequest() throws InterruptedException, IOException {
-        InputStream stdout = process.getInputStream();
-
-        WorkResponse parsedResponse;
-        try {
-            parsedResponse = WorkResponse.parseDelimitedFrom(stdout);
-        } catch (IOException e) {
-            throw e;
-        }
-
-        if (parsedResponse == null) return;
-
-        int workerId = parsedResponse.getRequestId();
-        ByteArrayOutputStream tempOs = new ByteArrayOutputStream();
-        parsedResponse.writeDelimitedTo(tempOs);
-
-        try {
-            semResponseMap.acquire();
-            responseMap.put(workerId, new ByteArrayInputStream(tempOs.toByteArray()));
-        } catch (InterruptedException e) {
-            throw e;
-        } finally {
-            semResponseMap.release();
-        }
-
-        try {
-            semResponseChecker.acquire();
-            responseChecker.get(workerId).release();
-        } catch (InterruptedException e) {
-            throw e;
-        } finally {
-            semResponseChecker.release();
-        }
-    }
-
-    public void run() {
-        while (!this.interrupted()) {
-            try {
-                waitRequest();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-    }
+  }
 }
