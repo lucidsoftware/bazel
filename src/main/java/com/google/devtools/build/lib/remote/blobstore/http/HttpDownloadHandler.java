@@ -15,7 +15,7 @@ package com.google.devtools.build.lib.remote.blobstore.http;
 
 import static com.google.common.base.Preconditions.checkState;
 
-import com.google.auth.Credentials;
+import com.google.devtools.build.lib.runtime.AuthHeadersProvider;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -50,8 +50,8 @@ final class HttpDownloadHandler extends AbstractHttpHandler<HttpObject> {
   /** the path header in the http request */
   private String path;
 
-  public HttpDownloadHandler(Credentials credentials) {
-    super(credentials);
+  public HttpDownloadHandler(AuthHeadersProvider authHeadersProvider) {
+    super(authHeadersProvider);
   }
 
   @Override

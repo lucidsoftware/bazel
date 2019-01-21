@@ -26,7 +26,7 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.common.util.concurrent.Uninterruptibles;
-import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authentication.TlsOptions;
 import com.google.devtools.build.lib.buildeventservice.client.BuildEventServiceClient;
 import com.google.devtools.build.lib.buildeventstream.AnnounceBuildEventTransportsEvent;
 import com.google.devtools.build.lib.buildeventstream.BuildEventArtifactUploader;
@@ -44,6 +44,7 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.runtime.BlazeCommandEventHandler;
+import com.google.devtools.build.lib.runtime.AuthHeadersProvider;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.BlazeModule.ModuleEnvironment;
 import com.google.devtools.build.lib.runtime.BuildEventStreamer;
@@ -63,6 +64,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -87,7 +89,7 @@ public abstract class BuildEventServiceModule<BESOptionsT extends BuildEventServ
       new AtomicReference<>();
 
   private BuildEventProtocolOptions bepOptions;
-  private AuthAndTLSOptions authTlsOptions;
+  private TlsOptions tlsOptions;
   private BuildEventStreamOptions besStreamOptions;
   private boolean useExperimentalUi;
 
@@ -138,7 +140,7 @@ public abstract class BuildEventServiceModule<BESOptionsT extends BuildEventServ
   public Iterable<Class<? extends OptionsBase>> getCommonCommandOptions() {
     return ImmutableList.of(
         optionsClass(),
-        AuthAndTLSOptions.class,
+        TlsOptions.class,
         BuildEventStreamOptions.class,
         BuildEventProtocolOptions.class);
   }
@@ -157,8 +159,8 @@ public abstract class BuildEventServiceModule<BESOptionsT extends BuildEventServ
     this.besOptions = Preconditions.checkNotNull(parsingResult.getOptions(optionsClass()));
     this.bepOptions =
         Preconditions.checkNotNull(parsingResult.getOptions(BuildEventProtocolOptions.class));
-    this.authTlsOptions =
-        Preconditions.checkNotNull(parsingResult.getOptions(AuthAndTLSOptions.class));
+    this.tlsOptions =
+        Preconditions.checkNotNull(parsingResult.getOptions(TlsOptions.class));
     this.besStreamOptions =
         Preconditions.checkNotNull(parsingResult.getOptions(BuildEventStreamOptions.class));
     this.useExperimentalUi =
@@ -375,10 +377,12 @@ public abstract class BuildEventServiceModule<BESOptionsT extends BuildEventServ
 
     constructAndReportIds();
 
+    Map<String, AuthHeadersProvider> authProviders = cmdEnv.getRuntime().getAuthHeadersProvidersMap();
+
     final BuildEventServiceClient besClient;
     try {
-      besClient = getBesClient(besOptions, authTlsOptions);
-    } catch (IOException | OptionsParsingException e) {
+      besClient = getBesClient(besOptions, tlsOptions, authProviders);
+    } catch (IOException | OptionsParsingException | AbruptExitException e) {
       reportError(
           cmdLineReporter,
           cmdEnv.getBlazeModuleEnvironment(),
@@ -522,8 +526,9 @@ public abstract class BuildEventServiceModule<BESOptionsT extends BuildEventServ
   protected abstract Class<BESOptionsT> optionsClass();
 
   protected abstract BuildEventServiceClient getBesClient(
-      BESOptionsT besOptions, AuthAndTLSOptions authAndTLSOptions)
-      throws IOException, OptionsParsingException;
+      BESOptionsT besOptions, TlsOptions tlsOptions,
+      Map<String, AuthHeadersProvider> authHeadersProvidersMap)
+      throws IOException, OptionsParsingException, AbruptExitException;
 
   protected abstract void clearBesClient();
 
@@ -547,5 +552,18 @@ public abstract class BuildEventServiceModule<BESOptionsT extends BuildEventServ
   @VisibleForTesting
   ImmutableSet<BuildEventTransport> getBepTransports() {
     return bepTransports;
+  }
+
+  @Nullable
+  private static AuthHeadersProvider selectAuthHeadersProvider(
+      Map<String, AuthHeadersProvider> authHeadersProvidersMap) {
+    // TODO(buchgr): Implement a selection strategy based on name.
+    for (AuthHeadersProvider provider : authHeadersProvidersMap.values()) {
+      if (provider.isEnabled()) {
+        return provider;
+      }
+    }
+
+    return null;
   }
 }
