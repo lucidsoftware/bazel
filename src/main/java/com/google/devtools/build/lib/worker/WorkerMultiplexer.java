@@ -31,7 +31,7 @@ import java.util.Map;
 import java.util.concurrent.Semaphore;
 
 /**
- * An intermediate worker that receives response from the worker processes
+ * An intermediate worker that receives response from the worker processes.
  */
 public class WorkerMultiplexer extends Thread {
   private static Semaphore semInstanceMap = new Semaphore(1);

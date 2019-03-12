@@ -154,7 +154,7 @@ final class WorkerSpawnRunner implements SpawnRunner {
             spawn, context, execRoot, sandboxUsesExpandedTreeArtifactsInRunfiles);
     SandboxOutputs outputs = SandboxHelpers.getOutputs(spawn);
 
-    boolean proxyed = spawn.getExecutionInfo().getOrDefault(ExecutionRequirements.SUPPORTS_MULTIPLEX_WORKERS, "0").equals("1");
+    boolean proxied = spawn.getExecutionInfo().getOrDefault(ExecutionRequirements.SUPPORTS_MULTIPLEX_WORKERS, "0").equals("1");
 
     WorkerKey key =
         new WorkerKey(
@@ -165,7 +165,7 @@ final class WorkerSpawnRunner implements SpawnRunner {
             workerFilesCombinedHash,
             workerFiles,
             context.speculating(),
-            proxyed);
+            proxied);
 
     WorkRequest workRequest = createWorkRequest(spawn, context, flagFiles, inputFileCache);
 
