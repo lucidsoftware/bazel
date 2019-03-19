@@ -39,6 +39,8 @@ message WorkRequest {
   // request.
   repeated Input inputs = 2;
 
+  // To support multiplex worker, each WorkRequest must have an unique ID. This ID should
+  // be attached unchanged to the WorkResponse.
   int32 request_id = 3;
 }
 
@@ -51,5 +53,8 @@ message WorkResponse {
   // encoding.
   string output = 2;
 
+  // To support multiplex worker, each WorkResponse must have an unique ID. Since worker processes
+  // which support multiplex worker will handle multiple WorkRequests in parallel, this ID will
+  // be used to determined which WorkerProxy does this WorkResponse belong to.
   int32 request_id = 3;
 }

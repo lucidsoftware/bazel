@@ -83,7 +83,8 @@ final class WorkerProxy extends Worker {
   }
 
   /**
-   * Reset the responseMap, pass the WorkRequest to worker process, and wait for WorkResponse.
+   * Send the WorkRequest to worker process, and wait for WorkResponse. We have
+   * to set the semaphore to 0 in order to pause the WorkerProxy thread.
    */
   @Override
   InputStream getInputStream() {

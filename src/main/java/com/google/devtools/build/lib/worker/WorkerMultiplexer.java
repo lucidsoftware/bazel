@@ -31,21 +31,53 @@ import java.util.Map;
 import java.util.concurrent.Semaphore;
 
 /**
- * An intermediate worker that receives response from the worker processes.
+ * An intermediate worker that sends request and receives response from the
+ * worker processes.
  */
 public class WorkerMultiplexer extends Thread {
-  private static Semaphore semInstanceMap = new Semaphore(1);
+  /**
+   * There should only be one WorkerMultiplexer corresponding to workers with
+   * the same mnemonic. If the WorkerMultiplexer has been constructed, other
+   * workers should point to the same one. The hash of WorkerKey is used as
+   * key.
+   */
   private static Map<Integer, WorkerMultiplexer> instanceMap = new HashMap<>();
+  /**
+   * A semaphore to protect instanceMap object.
+   */
+  private static Semaphore semInstanceMap = new Semaphore(1);
+  /**
+   * WorkerMultiplexer is running as a thread on its own. When worker process
+   * returns the WorkResponse, it is stored in this map and wait for
+   * WorkerProxy to retrieve the response.
+   */
   private Map<Integer, InputStream> responseMap;
-  private Map<Integer, Semaphore> responseChecker;
+  /**
+   * A semaphore to protect responseMap object.
+   */
   private Semaphore semResponseMap;
+  /**
+   * After sending the WorkRequest, WorkerProxy will wait on a semaphore to be
+   * released. WorkerMultiplexer is responsible to release the corresponding
+   * semaphore in order to signal WorkerProxy that the WorkerResponse has been
+   * received.
+   */
+  private Map<Integer, Semaphore> responseChecker;
+  /**
+   * A semaphore to protect responseChecker object.
+   */
   private Semaphore semResponseChecker;
+  /**
+   * The worker process that this WorkerMultiplexer should be talking to.
+   */
+  private Subprocess process;
+  /**
+   * A semaphore to protect process object.
+   */
   private Semaphore semAccessProcess;
 
-  private Subprocess process;
-  private Integer workerHash;
-
   private Thread shutdownHook;
+  private Integer workerHash;
 
   WorkerMultiplexer(Integer workerHash) {
     semAccessProcess = new Semaphore(1);
