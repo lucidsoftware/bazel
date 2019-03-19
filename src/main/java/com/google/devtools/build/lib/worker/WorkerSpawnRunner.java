@@ -167,10 +167,8 @@ final class WorkerSpawnRunner implements SpawnRunner {
             context.speculating(),
             proxied);
 
-    WorkRequest workRequest = createWorkRequest(spawn, context, flagFiles, inputFileCache);
-
     long startTime = System.currentTimeMillis();
-    WorkResponse response = execInWorker(spawn, key, workRequest, context, inputFiles, outputs);
+    WorkResponse response = execInWorker(spawn, key, context, inputFiles, outputs, flagFiles, inputFileCache);
     Duration wallTime = Duration.ofMillis(System.currentTimeMillis() - startTime);
 
     FileOutErr outErr = context.getFileOutErr();
@@ -218,7 +216,8 @@ final class WorkerSpawnRunner implements SpawnRunner {
       Spawn spawn,
       SpawnExecutionContext context,
       List<String> flagfiles,
-      MetadataProvider inputFileCache)
+      MetadataProvider inputFileCache,
+      int workerId)
       throws IOException {
     WorkRequest.Builder requestBuilder = WorkRequest.newBuilder();
     for (String flagfile : flagfiles) {
@@ -243,7 +242,7 @@ final class WorkerSpawnRunner implements SpawnRunner {
           .setDigest(digest)
           .build();
     }
-    return requestBuilder.build();
+    return requestBuilder.setRequestId(workerId).build();
   }
 
   /**
@@ -280,19 +279,21 @@ final class WorkerSpawnRunner implements SpawnRunner {
   private WorkResponse execInWorker(
       Spawn spawn,
       WorkerKey key,
-      WorkRequest request,
       SpawnExecutionContext context,
       Map<PathFragment, Path> inputFiles,
-      SandboxOutputs outputs)
+      SandboxOutputs outputs,
+      List<String> flagFiles,
+      MetadataProvider inputFileCache)
       throws InterruptedException, ExecException {
     Worker worker = null;
     WorkResponse response;
+    WorkRequest request;
 
     ActionExecutionMetadata owner = spawn.getResourceOwner();
     try {
       try {
         worker = workers.borrowObject(key);
-        request = request.toBuilder().setRequestId(worker.getWorkerId()).build();
+        request = createWorkRequest(spawn, context, flagFiles, inputFileCache, worker.getWorkerId());
       } catch (IOException e) {
         throw new UserExecException(
             ErrorMessage.builder()
