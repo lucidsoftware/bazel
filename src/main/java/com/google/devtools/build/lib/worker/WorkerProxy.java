@@ -38,7 +38,7 @@ final class WorkerProxy extends Worker {
     this.workerMultiplexer = WorkerMultiplexer.getInstance(workerKey.hashCode());
     this.request = new ByteArrayOutputStream();
 
-    final Worker self = this;
+    final WorkerProxy self = this;
     this.shutdownHook =
       new Thread(
         () -> {
@@ -72,7 +72,7 @@ final class WorkerProxy extends Worker {
   }
 
   @Override
-  synchronized void destroy() {
+  synchronized void destroy() throws IOException {
     if (shutdownHook != null) {
       Runtime.getRuntime().removeShutdownHook(shutdownHook);
     }

@@ -42,6 +42,9 @@ final class WorkerKey {
   private final HashCode workerFilesCombinedHash;
   private final SortedMap<PathFragment, HashCode> workerFilesWithHashes;
   private final boolean mustBeSandboxed;
+  /**
+   * A WorkerProxy will be instantiated if true, instantiate a regular Worker if false.
+   */
   private final boolean proxied;
 
   WorkerKey(
