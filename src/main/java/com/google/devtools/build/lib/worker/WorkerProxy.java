@@ -76,10 +76,11 @@ final class WorkerProxy extends Worker {
     if (shutdownHook != null) {
       Runtime.getRuntime().removeShutdownHook(shutdownHook);
     }
-    if (workerMultiplexer.isAlive()) {
+    workerMultiplexer.decreaseRefCount(workerKey.hashCode());
+    if (workerMultiplexer.getRefCount(workerKey.hashCode()) == 0 && workerMultiplexer.isAlive()) {
       workerMultiplexer.interrupt();
+      workerMultiplexer.destroyMultiplexer();
     }
-    workerMultiplexer.destroyMultiplexer();
   }
 
   /**
@@ -91,7 +92,7 @@ final class WorkerProxy extends Worker {
     byte[] requestBytes = request.toByteArray();
     request.reset();
     try {
-      workerMultiplexer.setResponseMap(workerId);
+      workerMultiplexer.setResponseChecker(workerId);
       workerMultiplexer.putRequest(requestBytes);
       return workerMultiplexer.getResponse(workerId);
     } catch (Exception e) {

@@ -41,21 +41,26 @@ public class WorkerMultiplexer extends Thread {
    * workers should point to the same one. The hash of WorkerKey is used as
    * key.
    */
-  private static Map<Integer, WorkerMultiplexer> instanceMap = new HashMap<>();
+  private static Map<Integer, WorkerMultiplexer> multiplexerInstance = new HashMap<>();
   /**
-   * A semaphore to protect instanceMap object.
+   * An accumulator of how many WorkerProxies are referencing a particular
+   * WorkerMultiplexer.
    */
-  private static Semaphore semInstanceMap = new Semaphore(1);
+  private static Map<Integer, Integer> multiplexerRefCount = new HashMap<>();
+  /**
+   * A semaphore to protect multiplexerInstance and multiplexerRefCount objects.
+   */
+  private static Semaphore semMultiplexer = new Semaphore(1);
   /**
    * WorkerMultiplexer is running as a thread on its own. When worker process
    * returns the WorkResponse, it is stored in this map and wait for
    * WorkerProxy to retrieve the response.
    */
-  private Map<Integer, InputStream> responseMap;
+  private Map<Integer, InputStream> workerProcessResponse;
   /**
-   * A semaphore to protect responseMap object.
+   * A semaphore to protect workerProcessResponse object.
    */
-  private Semaphore semResponseMap;
+  private Semaphore semWorkerProcessResponse;
   /**
    * After sending the WorkRequest, WorkerProxy will wait on a semaphore to be
    * released. WorkerMultiplexer is responsible to release the corresponding
@@ -81,10 +86,10 @@ public class WorkerMultiplexer extends Thread {
 
   WorkerMultiplexer(Integer workerHash) {
     semAccessProcess = new Semaphore(1);
-    semResponseMap = new Semaphore(1);
+    semWorkerProcessResponse = new Semaphore(1);
     semResponseChecker = new Semaphore(1);
     responseChecker = new HashMap<>();
-    responseMap = new HashMap<>();
+    workerProcessResponse = new HashMap<>();
     this.workerHash = workerHash;
 
     final WorkerMultiplexer self = this;
@@ -107,17 +112,41 @@ public class WorkerMultiplexer extends Thread {
    */
   public synchronized static WorkerMultiplexer getInstance(Integer workerHash) {
     try {
-      semInstanceMap.acquire();
-      if (!instanceMap.containsKey(workerHash)) {
-        instanceMap.put(workerHash, new WorkerMultiplexer(workerHash));
+      semMultiplexer.acquire();
+      if (!multiplexerInstance.containsKey(workerHash)) {
+        multiplexerInstance.put(workerHash, new WorkerMultiplexer(workerHash));
+        multiplexerRefCount.put(workerHash, 0);
       }
-      WorkerMultiplexer receiver = instanceMap.get(workerHash);
-      return receiver;
+      multiplexerRefCount.put(workerHash, multiplexerRefCount.get(workerHash) + 1);
+      return multiplexerInstance.get(workerHash);
     } catch (InterruptedException e) {
       e.printStackTrace();
       return null;
     } finally {
-      semInstanceMap.release();
+      semMultiplexer.release();
+    }
+  }
+
+  public synchronized static Integer getRefCount(Integer workerHash) {
+    try {
+      semMultiplexer.acquire();
+      return multiplexerRefCount.get(workerHash);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+      return null;
+    } finally {
+      semMultiplexer.release();
+    }
+  }
+
+  public synchronized static void decreaseRefCount(Integer workerHash) {
+    try {
+      semMultiplexer.acquire();
+      multiplexerRefCount.put(workerHash, multiplexerRefCount.get(workerHash) - 1);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    } finally {
+      semMultiplexer.release();
     }
   }
 
@@ -156,12 +185,13 @@ public class WorkerMultiplexer extends Thread {
       Runtime.getRuntime().removeShutdownHook(shutdownHook);
     }
     try {
-      semInstanceMap.acquire();
-      instanceMap.remove(workerHash);
+      semMultiplexer.acquire();
+      multiplexerInstance.remove(workerHash);
+      multiplexerRefCount.remove(workerHash);
     } catch (InterruptedException e) {
       e.printStackTrace();
     } finally {
-      semInstanceMap.release();
+      semMultiplexer.release();
     }
     try {
       semAccessProcess.acquire();
@@ -237,20 +267,20 @@ public class WorkerMultiplexer extends Thread {
     }
 
     try {
-      semResponseMap.acquire();
-      InputStream response = responseMap.get(workerId);
+      semWorkerProcessResponse.acquire();
+      InputStream response = workerProcessResponse.get(workerId);
       return response;
     } catch (InterruptedException e) {
       throw e;
     } finally {
-      semResponseMap.release();
+      semWorkerProcessResponse.release();
     }
   }
 
   /**
    * Reset the map that indicates if the WorkResponses have been returned.
    */
-  public void setResponseMap(int workerId) throws InterruptedException {
+  public void setResponseChecker(int workerId) throws InterruptedException {
     try {
       semResponseChecker.acquire();
       responseChecker.put(workerId, new Semaphore(0));
@@ -262,8 +292,8 @@ public class WorkerMultiplexer extends Thread {
   }
 
   /**
-   * When it gets a WorkResponse from worker process, put that WorkResponse to
-   * responseMap and signal responseChecker.
+   * When it gets a WorkResponse from worker process, put that WorkResponse in
+   * workerProcessResponse and signal responseChecker.
    */
   public void waitRequest() throws InterruptedException, IOException {
     InputStream stdout = process.getInputStream();
@@ -282,12 +312,12 @@ public class WorkerMultiplexer extends Thread {
     parsedResponse.writeDelimitedTo(tempOs);
 
     try {
-      semResponseMap.acquire();
-      responseMap.put(workerId, new ByteArrayInputStream(tempOs.toByteArray()));
+      semWorkerProcessResponse.acquire();
+      workerProcessResponse.put(workerId, new ByteArrayInputStream(tempOs.toByteArray()));
     } catch (InterruptedException e) {
       throw e;
     } finally {
-      semResponseMap.release();
+      semWorkerProcessResponse.release();
     }
 
     try {
