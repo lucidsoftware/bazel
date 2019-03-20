@@ -179,47 +179,27 @@ public class WorkerMultiplexer extends Thread {
   /**
    * A WorkerProxy waits on a semaphore for the WorkResponse returned from worker process.
    */
-  public InputStream getResponse(int workerId) throws InterruptedException {
-    Semaphore waitForResponse;
-    try {
-      semResponseChecker.acquire();
-      waitForResponse = responseChecker.get(workerId);
-    } catch (InterruptedException e) {
-      throw e;
-    } finally {
-      semResponseChecker.release();
-    }
+  public InputStream getResponse(Integer workerId) throws InterruptedException {
+    semResponseChecker.acquire();
+    Semaphore waitForResponse = responseChecker.get(workerId);
+    semResponseChecker.release();
 
-    try {
-      waitForResponse.acquire();
-    } catch (InterruptedException e) {
-      // Return empty InputStream if there is a compilation error.
-      return new ByteArrayInputStream(new byte[0]);
-    }
+    // If there is a compilation error, the semaphore will throw InterruptedException.
+    waitForResponse.acquire();
 
-    try {
-      semWorkerProcessResponse.acquire();
-      InputStream response = workerProcessResponse.get(workerId);
-      return response;
-    } catch (InterruptedException e) {
-      throw e;
-    } finally {
-      semWorkerProcessResponse.release();
-    }
+    semWorkerProcessResponse.acquire();
+    InputStream response = workerProcessResponse.get(workerId);
+    semWorkerProcessResponse.release();
+    return response;
   }
 
   /**
    * Reset the map that indicates if the WorkResponses have been returned.
    */
-  public void resetResponseChecker(int workerId) throws InterruptedException {
-    try {
-      semResponseChecker.acquire();
-      responseChecker.put(workerId, new Semaphore(0));
-    } catch (InterruptedException e) {
-      throw e;
-    } finally {
-      semResponseChecker.release();
-    }
+  public void resetResponseChecker(Integer workerId) throws InterruptedException {
+    semResponseChecker.acquire();
+    responseChecker.put(workerId, new Semaphore(0));
+    semResponseChecker.release();
   }
 
   /**
@@ -228,37 +208,21 @@ public class WorkerMultiplexer extends Thread {
    */
   public void waitRequest() throws InterruptedException, IOException {
     InputStream stdout = process.getInputStream();
-
-    WorkResponse parsedResponse;
-    try {
-      parsedResponse = WorkResponse.parseDelimitedFrom(stdout);
-    } catch (IOException e) {
-      throw e;
-    }
+    WorkResponse parsedResponse = WorkResponse.parseDelimitedFrom(stdout);
 
     if (parsedResponse == null) return;
 
-    int workerId = parsedResponse.getRequestId();
+    Integer workerId = parsedResponse.getRequestId();
     ByteArrayOutputStream tempOs = new ByteArrayOutputStream();
     parsedResponse.writeDelimitedTo(tempOs);
 
-    try {
-      semWorkerProcessResponse.acquire();
-      workerProcessResponse.put(workerId, new ByteArrayInputStream(tempOs.toByteArray()));
-    } catch (InterruptedException e) {
-      throw e;
-    } finally {
-      semWorkerProcessResponse.release();
-    }
+    semWorkerProcessResponse.acquire();
+    workerProcessResponse.put(workerId, new ByteArrayInputStream(tempOs.toByteArray()));
+    semWorkerProcessResponse.release();
 
-    try {
-      semResponseChecker.acquire();
-      responseChecker.get(workerId).release();
-    } catch (InterruptedException e) {
-      throw e;
-    } finally {
-      semResponseChecker.release();
-    }
+    semResponseChecker.acquire();
+    responseChecker.get(workerId).release();
+    semResponseChecker.release();
   }
 
   /**
