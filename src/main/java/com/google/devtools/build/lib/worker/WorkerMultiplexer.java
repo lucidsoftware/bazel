@@ -36,22 +36,6 @@ import java.util.concurrent.Semaphore;
  */
 public class WorkerMultiplexer extends Thread {
   /**
-   * There should only be one WorkerMultiplexer corresponding to workers with
-   * the same mnemonic. If the WorkerMultiplexer has been constructed, other
-   * workers should point to the same one. The hash of WorkerKey is used as
-   * key.
-   */
-  private static Map<Integer, WorkerMultiplexer> multiplexerInstance = new HashMap<>();
-  /**
-   * An accumulator of how many WorkerProxies are referencing a particular
-   * WorkerMultiplexer.
-   */
-  private static Map<Integer, Integer> multiplexerRefCount = new HashMap<>();
-  /**
-   * A semaphore to protect multiplexerInstance and multiplexerRefCount objects.
-   */
-  private static Semaphore semMultiplexer = new Semaphore(1);
-  /**
    * WorkerMultiplexer is running as a thread on its own. When worker process
    * returns the WorkResponse, it is stored in this map and wait for
    * WorkerProxy to retrieve the response.
@@ -107,50 +91,6 @@ public class WorkerMultiplexer extends Thread {
   }
 
   /**
-   * Returns a WorkerMultiplexer instance to WorkerProxy. WorkerProxys with the
-   * same workerHash talk to the same WorkerMultiplexer.
-   */
-  public synchronized static WorkerMultiplexer getInstance(Integer workerHash) {
-    try {
-      semMultiplexer.acquire();
-      if (!multiplexerInstance.containsKey(workerHash)) {
-        multiplexerInstance.put(workerHash, new WorkerMultiplexer(workerHash));
-        multiplexerRefCount.put(workerHash, 0);
-      }
-      multiplexerRefCount.put(workerHash, multiplexerRefCount.get(workerHash) + 1);
-      return multiplexerInstance.get(workerHash);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-      return null;
-    } finally {
-      semMultiplexer.release();
-    }
-  }
-
-  public synchronized static Integer getRefCount(Integer workerHash) {
-    try {
-      semMultiplexer.acquire();
-      return multiplexerRefCount.get(workerHash);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-      return null;
-    } finally {
-      semMultiplexer.release();
-    }
-  }
-
-  public synchronized static void decreaseRefCount(Integer workerHash) {
-    try {
-      semMultiplexer.acquire();
-      multiplexerRefCount.put(workerHash, multiplexerRefCount.get(workerHash) - 1);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-    } finally {
-      semMultiplexer.release();
-    }
-  }
-
-  /**
    * Only start one worker process for each WorkerMultiplexer, if it hasn't.
    */
   public synchronized void createProcess(WorkerKey workerKey, Path workDir, Path logFile) throws IOException {
@@ -183,15 +123,6 @@ public class WorkerMultiplexer extends Thread {
   synchronized void destroyMultiplexer() {
     if (shutdownHook != null) {
       Runtime.getRuntime().removeShutdownHook(shutdownHook);
-    }
-    try {
-      semMultiplexer.acquire();
-      multiplexerInstance.remove(workerHash);
-      multiplexerRefCount.remove(workerHash);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-    } finally {
-      semMultiplexer.release();
     }
     try {
       semAccessProcess.acquire();
@@ -280,7 +211,7 @@ public class WorkerMultiplexer extends Thread {
   /**
    * Reset the map that indicates if the WorkResponses have been returned.
    */
-  public void setResponseChecker(int workerId) throws InterruptedException {
+  public void resetResponseChecker(int workerId) throws InterruptedException {
     try {
       semResponseChecker.acquire();
       responseChecker.put(workerId, new Semaphore(0));

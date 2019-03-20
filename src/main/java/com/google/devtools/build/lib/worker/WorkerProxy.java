@@ -29,14 +29,20 @@ import java.util.Set;
  * A proxy that talks to the multiplexers
  */
 final class WorkerProxy extends Worker {
-  private WorkerMultiplexer workerMultiplexer;
+  private Integer workerHash;
   private ByteArrayOutputStream request;
+  private WorkerMultiplexer workerMultiplexer;
   private Thread shutdownHook;
 
   WorkerProxy(WorkerKey workerKey, int workerId, Path workDir, Path logFile) {
     super(workerKey, workerId, workDir, logFile);
-    this.workerMultiplexer = WorkerMultiplexer.getInstance(workerKey.hashCode());
+    this.workerHash = workerKey.hashCode();
     this.request = new ByteArrayOutputStream();
+    try {
+      this.workerMultiplexer = WorkerMultiplexerManager.getInstance(workerHash);
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    }
 
     final WorkerProxy self = this;
     this.shutdownHook =
@@ -76,10 +82,15 @@ final class WorkerProxy extends Worker {
     if (shutdownHook != null) {
       Runtime.getRuntime().removeShutdownHook(shutdownHook);
     }
-    workerMultiplexer.decreaseRefCount(workerKey.hashCode());
-    if (workerMultiplexer.getRefCount(workerKey.hashCode()) == 0 && workerMultiplexer.isAlive()) {
-      workerMultiplexer.interrupt();
-      workerMultiplexer.destroyMultiplexer();
+    try {
+      WorkerMultiplexerManager.decreaseRefCount(workerHash);
+      if (WorkerMultiplexerManager.getRefCount(workerHash) == 0 && workerMultiplexer.isAlive()) {
+        workerMultiplexer.interrupt();
+        workerMultiplexer.destroyMultiplexer();
+        WorkerMultiplexerManager.removeInstance(workerHash);
+      }
+    } catch (InterruptedException e) {
+      e.printStackTrace();
     }
   }
 
@@ -92,7 +103,7 @@ final class WorkerProxy extends Worker {
     byte[] requestBytes = request.toByteArray();
     request.reset();
     try {
-      workerMultiplexer.setResponseChecker(workerId);
+      workerMultiplexer.resetResponseChecker(workerId);
       workerMultiplexer.putRequest(requestBytes);
       return workerMultiplexer.getResponse(workerId);
     } catch (Exception e) {
