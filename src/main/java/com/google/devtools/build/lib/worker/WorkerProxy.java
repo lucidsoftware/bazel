@@ -41,7 +41,7 @@ final class WorkerProxy extends Worker {
     try {
       this.workerMultiplexer = WorkerMultiplexerManager.getInstance(workerHash);
     } catch (InterruptedException e) {
-      e.printStackTrace();
+      // We can't do anything here.
     }
 
     final WorkerProxy self = this;
@@ -65,8 +65,6 @@ final class WorkerProxy extends Worker {
 
   @Override
   boolean isAlive() {
-    // This is horrible, but Process.isAlive() is only available from Java 8 on and this is the
-    // best we can do prior to that.
     return workerMultiplexer.isProcessAlive();
   }
 
@@ -83,14 +81,9 @@ final class WorkerProxy extends Worker {
       Runtime.getRuntime().removeShutdownHook(shutdownHook);
     }
     try {
-      WorkerMultiplexerManager.decreaseRefCount(workerHash);
-      if (WorkerMultiplexerManager.getRefCount(workerHash) == 0 && workerMultiplexer.isAlive()) {
-        workerMultiplexer.interrupt();
-        workerMultiplexer.destroyMultiplexer();
-        WorkerMultiplexerManager.removeInstance(workerHash);
-      }
+      WorkerMultiplexerManager.removeInstance(workerHash);
     } catch (InterruptedException e) {
-      e.printStackTrace();
+      // We can't do anything here.
     }
   }
 
@@ -107,7 +100,7 @@ final class WorkerProxy extends Worker {
       workerMultiplexer.putRequest(requestBytes);
       return workerMultiplexer.getResponse(workerId);
     } catch (Exception e) {
-      e.printStackTrace();
+      // Return empty InputStream if exception occurs.
       return new ByteArrayInputStream(new byte[0]);
     }
   }

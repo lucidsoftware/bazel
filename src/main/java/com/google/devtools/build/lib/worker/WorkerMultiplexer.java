@@ -60,16 +60,11 @@ public class WorkerMultiplexer extends Thread {
    * The worker process that this WorkerMultiplexer should be talking to.
    */
   private Subprocess process;
-  /**
-   * A semaphore to protect process object.
-   */
-  private Semaphore semAccessProcess;
 
   private Thread shutdownHook;
   private Integer workerHash;
 
   WorkerMultiplexer(Integer workerHash) {
-    semAccessProcess = new Semaphore(1);
     semWorkerProcessResponse = new Semaphore(1);
     semResponseChecker = new Semaphore(1);
     responseChecker = new HashMap<>();
@@ -94,48 +89,35 @@ public class WorkerMultiplexer extends Thread {
    * Only start one worker process for each WorkerMultiplexer, if it hasn't.
    */
   public synchronized void createProcess(WorkerKey workerKey, Path workDir, Path logFile) throws IOException {
-    try {
-      semAccessProcess.acquire();
-      if (this.process == null || this.process.finished()) {
-        List<String> args = workerKey.getArgs();
-        File executable = new File(args.get(0));
-        if (!executable.isAbsolute() && executable.getParent() != null) {
-          args = new ArrayList<>(args);
-          args.set(0, new File(workDir.getPathFile(), args.get(0)).getAbsolutePath());
-        }
-        SubprocessBuilder processBuilder = new SubprocessBuilder();
-        processBuilder.setArgv(args);
-        processBuilder.setWorkingDirectory(workDir.getPathFile());
-        processBuilder.setStderr(logFile.getPathFile());
-        processBuilder.setEnv(workerKey.getEnv());
-        this.process = processBuilder.start();
+    if (this.process == null) {
+      List<String> args = workerKey.getArgs();
+      File executable = new File(args.get(0));
+      if (!executable.isAbsolute() && executable.getParent() != null) {
+        args = new ArrayList<>(args);
+        args.set(0, new File(workDir.getPathFile(), args.get(0)).getAbsolutePath());
       }
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-    } finally {
-      semAccessProcess.release();
+      SubprocessBuilder processBuilder = new SubprocessBuilder();
+      processBuilder.setArgv(args);
+      processBuilder.setWorkingDirectory(workDir.getPathFile());
+      processBuilder.setStderr(logFile.getPathFile());
+      processBuilder.setEnv(workerKey.getEnv());
+      this.process = processBuilder.start();
     }
     if (!this.isAlive()) {
       this.start();
     }
   }
 
-  synchronized void destroyMultiplexer() {
+  public synchronized void destroyMultiplexer() {
     if (shutdownHook != null) {
       Runtime.getRuntime().removeShutdownHook(shutdownHook);
     }
-    try {
-      semAccessProcess.acquire();
-      if (this.process != null) {
-        destroyProcess(this.process);
-      }
-      semAccessProcess.release();
-    } catch (InterruptedException e) {
-      e.printStackTrace();
+    if (this.process != null) {
+      destroyProcess(this.process);
     }
   }
 
-  private static void destroyProcess(Subprocess process) {
+  private void destroyProcess(Subprocess process) {
     boolean wasInterrupted = false;
     try {
       process.destroy();
@@ -156,15 +138,7 @@ public class WorkerMultiplexer extends Thread {
   }
 
   public boolean isProcessAlive() {
-    try {
-      semAccessProcess.acquire();
-      return !this.process.finished();
-    } catch (InterruptedException e) {
-      e.printStackTrace();
-      return false;
-    } finally {
-      semAccessProcess.release();
-    }
+    return !this.process.finished();
   }
 
   /**
@@ -206,7 +180,7 @@ public class WorkerMultiplexer extends Thread {
    * When it gets a WorkResponse from worker process, put that WorkResponse in
    * workerProcessResponse and signal responseChecker.
    */
-  public void waitRequest() throws InterruptedException, IOException {
+  private void waitResponse() throws InterruptedException, IOException {
     InputStream stdout = process.getInputStream();
     WorkResponse parsedResponse = WorkResponse.parseDelimitedFrom(stdout);
 
@@ -231,9 +205,9 @@ public class WorkerMultiplexer extends Thread {
   public void run() {
     while (!this.interrupted()) {
       try {
-        waitRequest();
+        waitResponse();
       } catch (Exception e) {
-        e.printStackTrace();
+        // We can't do anything here.
       }
     }
   }

@@ -63,29 +63,13 @@ public class WorkerMultiplexerManager {
    */
   public static void removeInstance(Integer workerHash) throws InterruptedException {
     semMultiplexer.acquire();
-    multiplexerInstance.remove(workerHash);
-    multiplexerRefCount.remove(workerHash);
-    semMultiplexer.release();
-  }
-
-  /**
-   * Return the number of WorkerProxies that have the reference to this
-   * WorkerMultiplexer.
-   */
-  public static Integer getRefCount(Integer workerHash) throws InterruptedException {
-    semMultiplexer.acquire();
-    Integer count = multiplexerRefCount.get(workerHash);
-    semMultiplexer.release();
-    return count;
-  }
-
-  /**
-   * Decrease the number of WorkerProxies that have the reference to this
-   * WorkerMultiplexer.
-   */
-  public static void decreaseRefCount(Integer workerHash) throws InterruptedException {
-    semMultiplexer.acquire();
     multiplexerRefCount.put(workerHash, multiplexerRefCount.get(workerHash) - 1);
+    if (multiplexerRefCount.get(workerHash) == 0) {
+      multiplexerInstance.get(workerHash).interrupt();
+      multiplexerInstance.get(workerHash).destroyMultiplexer();
+      multiplexerInstance.remove(workerHash);
+      multiplexerRefCount.remove(workerHash);
+    }
     semMultiplexer.release();
   }
 }
