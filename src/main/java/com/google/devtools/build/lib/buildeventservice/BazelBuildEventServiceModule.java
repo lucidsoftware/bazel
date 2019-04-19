@@ -116,12 +116,15 @@ public class BazelBuildEventServiceModule
   private static AuthHeadersProvider selectAuthHeadersProvider(
       Map<String, AuthHeadersProvider> authHeadersProvidersMap) {
     // TODO(buchgr): Implement a selection strategy based on name.
-    for (AuthHeadersProvider provider : authHeadersProvidersMap.values()) {
-      if (provider.isEnabled()) {
-        return provider;
-      }
-    }
 
-    return null;
+    // This is the hacky change for Google auth
+    return authHeadersProvidersMap.get("google");
+    // for (AuthHeadersProvider provider : authHeadersProvidersMap.values()) {
+    //   if (provider.isEnabled()) {
+    //     return provider;
+    //   }
+    // }
+
+    // return null;
   }
 }
