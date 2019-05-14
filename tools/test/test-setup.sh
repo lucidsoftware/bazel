@@ -285,17 +285,17 @@ tail -fq --pid $pid -s 0.001 /dev/null &> /dev/null || has_tail=false
 
 if [[ "${EXPERIMENTAL_SPLIT_XML_GENERATION}" == "1" ]]; then
   if [ -z "$COVERAGE_DIR" ]; then
-    "${TEST_PATH}" "$@" 2>&1 || exitCode=$?
+    "${TEST_PATH}" "$@" <&0 2>&1 || exitCode=$?
   else
-    "$1" "$TEST_PATH" "${@:3}" 2>&1 || exitCode=$?
+    "$1" "$TEST_PATH" "${@:3}" <&0 2>&1 || exitCode=$?
   fi
 elif [ "$has_tail" == true ] && [  -z "$no_echo" ]; then
   touch "${XML_OUTPUT_FILE}.log"
   if [ -z "$COVERAGE_DIR" ]; then
-    ("${TEST_PATH}" "$@" &>"${XML_OUTPUT_FILE}.log") &
+    ("${TEST_PATH}" "$@" &>"${XML_OUTPUT_FILE}.log") <&0 &
     pid=$!
   else
-    ("$1" "$TEST_PATH" "${@:3}" &> "${XML_OUTPUT_FILE}.log") &
+    ("$1" "$TEST_PATH" "${@:3}" &> "${XML_OUTPUT_FILE}.log") <&0 &
     pid=$!
   fi
   tail -fq --pid $pid -s 0.001 "${XML_OUTPUT_FILE}.log"
@@ -303,9 +303,9 @@ elif [ "$has_tail" == true ] && [  -z "$no_echo" ]; then
   exitCode=$?
 else
   if [ -z "$COVERAGE_DIR" ]; then
-    "${TEST_PATH}" "$@" 2> >(tee -a "${XML_OUTPUT_FILE}.log" >&2) 1> >(tee -a "${XML_OUTPUT_FILE}.log") 2>&1 || exitCode=$?
+    "${TEST_PATH}" "$@" <&0 2> >(tee -a "${XML_OUTPUT_FILE}.log" >&2) 1> >(tee -a "${XML_OUTPUT_FILE}.log") 2>&1 || exitCode=$?
   else
-    "$1" "$TEST_PATH" "${@:3}" 2> >(tee -a "${XML_OUTPUT_FILE}.log" >&2) 1> >(tee -a "${XML_OUTPUT_FILE}.log") 2>&1 || exitCode=$?
+    "$1" "$TEST_PATH" "${@:3}" <&0 2> >(tee -a "${XML_OUTPUT_FILE}.log" >&2) 1> >(tee -a "${XML_OUTPUT_FILE}.log") 2>&1 || exitCode=$?
   fi
 fi
 
