@@ -19,12 +19,18 @@ import com.google.common.base.Ascii;
 import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.remote.blobstore.CombinedDiskHttpBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.ConcurrentMapBlobStore;
+import com.google.devtools.build.lib.remote.blobstore.GrpcBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.OnDiskBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.SimpleBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.http.HttpBlobStore;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
+import com.google.devtools.build.lib.remote.shared.ByteStreamUploader;
+import com.google.devtools.build.lib.remote.shared.ReferenceCountedChannel;
+import com.google.devtools.build.lib.remote.shared.RemoteRetrier;
+import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import io.grpc.CallCredentials;
 import io.netty.channel.unix.DomainSocketAddress;
 import java.io.IOException;
 import java.net.URI;
@@ -40,7 +46,7 @@ public final class SimpleBlobStoreFactory {
   private SimpleBlobStoreFactory() {}
 
   public static SimpleBlobStore create(RemoteOptions remoteOptions, @Nullable Path casPath) {
-    if (isHttpUrlOptions(remoteOptions)) {
+    if (isHttpCache(remoteOptions)) {
       return createHttp(remoteOptions, /* creds= */ null);
     } else if (casPath != null) {
       return new OnDiskBlobStore(casPath);
@@ -54,10 +60,10 @@ public final class SimpleBlobStoreFactory {
       throws IOException {
 
     Preconditions.checkNotNull(workingDirectory, "workingDirectory");
-    if (isHttpUrlOptions(options) && isDiskCache(options)) {
+    if (isHttpCache(options) && isDiskCache(options)) {
       return createCombinedCache(workingDirectory, options.diskCache, options, creds);
     }
-    if (isHttpUrlOptions(options)) {
+    if (isHttpCache(options)) {
       return createHttp(options, creds);
     }
     if (isDiskCache(options)) {
@@ -68,8 +74,26 @@ public final class SimpleBlobStoreFactory {
             + " options expected.");
   }
 
-  public static boolean isRemoteCacheOptions(RemoteOptions options) {
-    return isHttpUrlOptions(options) || isDiskCache(options);
+  public static SimpleBlobStore create(
+      RemoteOptions options, @Nullable Credentials creds, Path workingDirectory,
+      ReferenceCountedChannel channel,
+      CallCredentials credentials,
+      RemoteRetrier retrier,
+      ByteStreamUploader uploader,
+      DigestUtil digestUtil)
+      throws IOException {
+
+    Preconditions.checkNotNull(workingDirectory, "workingDirectory");
+    // TODO:
+    // if (isGrpcCache(options) && isDiskCache(options)) {
+    //   return createGrpcCache(channel, credentials, options, retrier, digestUtil, uploader);
+    // }
+    if (isGrpcCache(options)) {
+      return createGrpcCache(channel, credentials, options, retrier, digestUtil, uploader);
+    }
+    throw new IllegalArgumentException(
+        "Unrecognized RemoteOptions configuration: remote gRPC cache and/or local disk cache"
+            + " options expected.");
   }
 
   private static SimpleBlobStore createHttp(RemoteOptions options, Credentials creds) {
@@ -111,6 +135,16 @@ public final class SimpleBlobStoreFactory {
     return new OnDiskBlobStore(cacheDir);
   }
 
+  private static SimpleBlobStore createGrpcCache(
+      ReferenceCountedChannel channel,
+      CallCredentials credentials,
+      RemoteOptions options,
+      RemoteRetrier retrier,
+      DigestUtil digestUtil,
+      ByteStreamUploader uploader) {
+    return new GrpcBlobStore(channel, credentials, options, retrier, digestUtil, uploader);
+  }
+
   private static SimpleBlobStore createCombinedCache(
       Path workingDirectory, PathFragment diskCachePath, RemoteOptions options, Credentials cred)
       throws IOException {
@@ -126,13 +160,21 @@ public final class SimpleBlobStoreFactory {
     return new CombinedDiskHttpBlobStore(diskCache, httpCache);
   }
 
-  private static boolean isDiskCache(RemoteOptions options) {
+  public static boolean isDiskCache(RemoteOptions options) {
     return options.diskCache != null && !options.diskCache.isEmpty();
   }
 
-  private static boolean isHttpUrlOptions(RemoteOptions options) {
+  public static boolean isHttpCache(RemoteOptions options) {
     return options.remoteCache != null
         && (Ascii.toLowerCase(options.remoteCache).startsWith("http://")
+            || Ascii.toLowerCase(options.remoteCache).startsWith("https://"));
+  }
+
+  /** Returns true if 'options.remoteCache' uses 'grpc' or an empty scheme */
+  public static boolean isGrpcCache(RemoteOptions options) {
+    return options.remoteCache != null
+        // TODO(ishikhman): add proper URI validation/parsing for remote options
+        && !(Ascii.toLowerCase(options.remoteCache).startsWith("http://")
             || Ascii.toLowerCase(options.remoteCache).startsWith("https://"));
   }
 }

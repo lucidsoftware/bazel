@@ -29,8 +29,13 @@ import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
+import com.google.devtools.build.lib.remote.blobstore.GrpcBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.SimpleBlobStore;
+import com.google.devtools.build.lib.remote.merkletree.MerkleTree;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
+import com.google.devtools.build.lib.remote.shared.CacheNotFoundException;
+import com.google.devtools.build.lib.remote.shared.Chunker;
+import com.google.devtools.build.lib.remote.shared.ExecutionStatusException;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.DigestUtil.ActionKey;
 import com.google.devtools.build.lib.remote.util.Utils;
@@ -38,6 +43,7 @@ import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.Message;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -87,7 +93,7 @@ public final class SimpleBlobStoreActionCache extends AbstractRemoteActionCache 
   private Digest uploadFileContents(Path file) throws IOException, InterruptedException {
     Digest digest = digestUtil.compute(file);
     try (InputStream in = file.getInputStream()) {
-      return uploadStream(digest, in);
+      return uploadStream(digest, null, in);
     }
   }
 
@@ -110,7 +116,7 @@ public final class SimpleBlobStoreActionCache extends AbstractRemoteActionCache 
       Digest stdout = uploadFileContents(outErr.getOutputPath());
       result.setStdoutDigest(stdout);
     }
-    blobStore.putActionResult(actionKey.getDigest().getHash(), result.build().toByteArray());
+    blobStore.putActionResult(actionKey.getDigest(), result.build());
   }
 
   public void upload(
@@ -136,12 +142,14 @@ public final class SimpleBlobStoreActionCache extends AbstractRemoteActionCache 
 
     for (Map.Entry<Digest, Path> entry : manifest.getDigestToFile().entrySet()) {
       try (InputStream in = entry.getValue().getInputStream()) {
-        uploadStream(entry.getKey(), in);
+        Digest digest = entry.getKey();
+        uploadStream(digest, Chunker.builder().setInput(digest.getSizeBytes(), entry.getValue()).build(), in);
       }
     }
 
     for (Map.Entry<Digest, Chunker> entry : manifest.getDigestToChunkers().entrySet()) {
-      uploadBlob(entry.getValue().next().getData().toByteArray(), entry.getKey());
+      Chunker chunker = entry.getValue();
+      uploadBlob(chunker.next().getData().toByteArray(), entry.getKey(), chunker);
     }
   }
 
@@ -160,22 +168,22 @@ public final class SimpleBlobStoreActionCache extends AbstractRemoteActionCache 
   }
 
   public Digest uploadBlob(byte[] blob) throws IOException, InterruptedException {
-    return uploadBlob(blob, digestUtil.compute(blob));
+    return uploadBlob(blob, digestUtil.compute(blob), null);
   }
 
-  private Digest uploadBlob(byte[] blob, Digest digest) throws IOException, InterruptedException {
+  private Digest uploadBlob(byte[] blob, Digest digest, Chunker chunker) throws IOException, InterruptedException {
     try (InputStream in = new ByteArrayInputStream(blob)) {
-      return uploadStream(digest, in);
+      return uploadStream(digest, chunker, in);
     }
   }
 
-  public Digest uploadStream(Digest digest, InputStream in)
+  public Digest uploadStream(Digest digest, Chunker chunker, InputStream in)
       throws IOException, InterruptedException {
     final String hash = digest.getHash();
 
     if (storedBlobs.putIfAbsent(hash, true) == null) {
       try {
-        blobStore.put(hash, digest.getSizeBytes(), in);
+        blobStore.put(hash, digest, digest.getSizeBytes(), chunker, in);
       } catch (Exception e) {
         storedBlobs.remove(hash);
         throw e;
@@ -206,7 +214,7 @@ public final class SimpleBlobStoreActionCache extends AbstractRemoteActionCache 
     }
     // This unconditionally downloads the whole blob into memory!
     ByteArrayOutputStream out = new ByteArrayOutputStream();
-    boolean success = getFromFuture(blobStore.getActionResult(digest.getHash(), out));
+    boolean success = getFromFuture(blobStore.getActionResult(digest, out));
     if (!success) {
       throw new CacheNotFoundException(digest, digestUtil);
     }
@@ -215,7 +223,7 @@ public final class SimpleBlobStoreActionCache extends AbstractRemoteActionCache 
 
   public void setCachedActionResult(ActionKey actionKey, ActionResult result)
       throws IOException, InterruptedException {
-    blobStore.putActionResult(actionKey.getDigest().getHash(), result.toByteArray());
+    blobStore.putActionResult(actionKey.getDigest(), result);
   }
 
   @Override
@@ -230,7 +238,7 @@ public final class SimpleBlobStoreActionCache extends AbstractRemoteActionCache 
     HashingOutputStream hashOut =
         options.remoteVerifyDownloads ? digestUtil.newHashingOutputStream(out) : null;
     Futures.addCallback(
-        blobStore.get(digest.getHash(), hashOut != null ? hashOut : out),
+        blobStore.get(digest.getHash(), digest, hashOut != null ? hashOut : out),
         new FutureCallback<Boolean>() {
           @Override
           public void onSuccess(Boolean found) {
@@ -256,5 +264,16 @@ public final class SimpleBlobStoreActionCache extends AbstractRemoteActionCache 
         },
         MoreExecutors.directExecutor());
     return outerF;
+  }
+
+  public void ensureInputsPresent(
+      MerkleTree merkleTree, Map<Digest, Message> additionalInputs, Path execRoot)
+      throws IOException, InterruptedException {
+    blobStore.ensureInputsPresent(merkleTree, additionalInputs, execRoot);
+  }
+
+  @Override
+  public boolean isGrpcBlobStore() {
+    return blobStore instanceof GrpcBlobStore;
   }
 }
