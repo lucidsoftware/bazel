@@ -42,7 +42,7 @@ public final class RemoteOptions extends OptionsBase {
   @Option(
       name = "remote_proxy",
       oldName = "remote_cache_proxy",
-      defaultValue = "null",
+      defaultValue = "",
       documentationCategory = OptionDocumentationCategory.REMOTE,
       effectTags = {OptionEffectTag.UNKNOWN},
       help =

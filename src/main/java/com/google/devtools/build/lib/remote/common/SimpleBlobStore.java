@@ -18,6 +18,7 @@ import build.bazel.remote.execution.v2.Action;
 import build.bazel.remote.execution.v2.ActionResult;
 import build.bazel.remote.execution.v2.Digest;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
@@ -49,6 +50,9 @@ public interface SimpleBlobStore {
 
   /**
    * Downloads an action result for the {@code actionKey}.
+   *
+   * <p>Note: An action cache entry does not guarantee the availability of all referenced outputs
+   * in the CAS.
    *
    * @param actionKey The digest of the {@link Action} that generated the action result.
    * @return A Future representing pending download of an action result. If an action result
@@ -94,6 +98,8 @@ public interface SimpleBlobStore {
    * @return A future representing pending completion of the upload.
    */
   ListenableFuture<Void> uploadBlob(Digest digest, ByteString data);
+
+  ImmutableSet<Digest> findMissingBlobs(Iterable<Digest> digests) throws IOException, InterruptedException;
 
   /** Close resources associated with the remote cache. */
   void close();

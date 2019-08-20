@@ -30,10 +30,10 @@ import java.util.logging.Logger;
 final class ActionCacheServer extends ActionCacheImplBase {
   private static final Logger logger = Logger.getLogger(ActionCacheImplBase.class.getName());
 
-  private final SimpleBlobStoreActionCache cache;
+  private final OnDiskBlobStoreActionCache cache;
   private final DigestUtil digestUtil;
 
-  public ActionCacheServer(SimpleBlobStoreActionCache cache, DigestUtil digestUtil) {
+  public ActionCacheServer(OnDiskBlobStoreActionCache cache, DigestUtil digestUtil) {
     this.cache = cache;
     this.digestUtil = digestUtil;
   }
@@ -63,7 +63,7 @@ final class ActionCacheServer extends ActionCacheImplBase {
       UpdateActionResultRequest request, StreamObserver<ActionResult> responseObserver) {
     try {
       ActionKey actionKey = digestUtil.asActionKey(request.getActionDigest());
-      cache.setCachedActionResult(actionKey, request.getActionResult());
+      cache.uploadActionResult(actionKey, request.getActionResult());
       responseObserver.onNext(request.getActionResult());
       responseObserver.onCompleted();
     } catch (Exception e) {

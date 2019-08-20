@@ -15,14 +15,18 @@ package com.google.devtools.build.lib.remote.disk;
 
 import build.bazel.remote.execution.v2.ActionResult;
 import build.bazel.remote.execution.v2.Digest;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.SimpleBlobStore;
+import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.Utils;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,12 +35,31 @@ import java.util.UUID;
 
 /** A on-disk store for the remote action cache. */
 public class OnDiskBlobStore implements SimpleBlobStore {
-  private final Path root;
+
   private static final String ACTION_KEY_PREFIX = "ac_";
 
-  public OnDiskBlobStore(Path root) {
+  private final Path root;
+  private final boolean verifyDownloadsChecksum;
+  private final DigestUtil digestUtil;
+
+  public OnDiskBlobStore(Path root, DigestUtil digestUtil, boolean verifyDownloadsChecksum) {
     this.root = root;
+    this.verifyDownloadsChecksum = verifyDownloadsChecksum;
+    this.digestUtil = digestUtil;
   }
+
+  public static OnDiskBlobStore create(Path workingDirectory, PathFragment diskCachePath,
+      DigestUtil digestUtil, boolean verifyDownloadsChecksum)
+      throws IOException {
+    Preconditions.checkNotNull(workingDirectory, "workingDirectory");
+    Preconditions.checkNotNull(diskCachePath, "diskCachePath");
+    Path cacheDir = workingDirectory.getRelative(diskCachePath);
+    if (!cacheDir.exists()) {
+      cacheDir.createDirectoryAndParents();
+    }
+    return new OnDiskBlobStore(cacheDir, digestUtil, verifyDownloadsChecksum);
+  }
+
 
   /** Returns {@code true} if the provided {@code key} is stored in the CAS. */
   public boolean contains(Digest digest) {
@@ -70,7 +93,12 @@ public class OnDiskBlobStore implements SimpleBlobStore {
 
   @Override
   public ListenableFuture<Void> downloadBlob(Digest digest, OutputStream out) {
-    return download(digest, out, /* isActionCache= */ false);
+    if (verifyDownloadsChecksum) {
+      return Utils.checksumDownload(digest, out, digestUtil,
+          (d, o) -> download(d, o, /* isActionCache= */ false));
+    } else {
+      return download(digest, out, /* isActionCache= */ false);
+    }
   }
 
   @Override
@@ -107,6 +135,11 @@ public class OnDiskBlobStore implements SimpleBlobStore {
       return Futures.immediateFailedFuture(e);
     }
     return Futures.immediateFuture(null);
+  }
+
+  @Override
+  public ImmutableSet<Digest> findMissingBlobs(Iterable<Digest> digests) {
+    return ImmutableSet.copyOf(digests);
   }
 
   protected Path toPath(String key, boolean actionResult) {

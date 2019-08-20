@@ -52,8 +52,8 @@ import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifac
 import com.google.devtools.build.lib.actions.cache.MetadataInjector;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.clock.JavaClock;
-import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.OutputFilesLocker;
-import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.UploadManifest;
+import com.google.devtools.build.lib.remote.RemoteCache.OutputFilesLocker;
+import com.google.devtools.build.lib.remote.RemoteCache.UploadManifest;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.SimpleBlobStore.ActionKey;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
@@ -92,9 +92,9 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 
-/** Tests for {@link AbstractRemoteActionCache}. */
+/** Tests for {@link RemoteCache}. */
 @RunWith(JUnit4.class)
-public class AbstractRemoteActionCacheTests {
+public class RemoteCacheTests {
 
   @Mock private OutputFilesLocker outputFilesLocker;
 
@@ -534,7 +534,7 @@ public class AbstractRemoteActionCacheTests {
 
   @Test
   public void downloadRelativeFileSymlink() throws Exception {
-    AbstractRemoteActionCache cache = newTestCache();
+    RemoteCache cache = newTestCache();
     ActionResult.Builder result = ActionResult.newBuilder();
     result.addOutputFileSymlinksBuilder().setPath("a/b/link").setTarget("../../foo");
     // Doesn't check for dangling links, hence download succeeds.
@@ -547,7 +547,7 @@ public class AbstractRemoteActionCacheTests {
 
   @Test
   public void downloadRelativeDirectorySymlink() throws Exception {
-    AbstractRemoteActionCache cache = newTestCache();
+    RemoteCache cache = newTestCache();
     ActionResult.Builder result = ActionResult.newBuilder();
     result.addOutputDirectorySymlinksBuilder().setPath("a/b/link").setTarget("foo");
     // Doesn't check for dangling links, hence download succeeds.
@@ -580,7 +580,7 @@ public class AbstractRemoteActionCacheTests {
 
   @Test
   public void downloadAbsoluteDirectorySymlinkError() throws Exception {
-    AbstractRemoteActionCache cache = newTestCache();
+    RemoteCache cache = newTestCache();
     ActionResult.Builder result = ActionResult.newBuilder();
     result.addOutputDirectorySymlinksBuilder().setPath("foo").setTarget("/abs/link");
     IOException expected =
@@ -594,7 +594,7 @@ public class AbstractRemoteActionCacheTests {
 
   @Test
   public void downloadAbsoluteFileSymlinkError() throws Exception {
-    AbstractRemoteActionCache cache = newTestCache();
+    RemoteCache cache = newTestCache();
     ActionResult.Builder result = ActionResult.newBuilder();
     result.addOutputFileSymlinksBuilder().setPath("foo").setTarget("/abs/link");
     IOException expected =
@@ -1092,7 +1092,7 @@ public class AbstractRemoteActionCacheTests {
     return new DefaultRemoteActionCache(options, digestUtil);
   }
 
-  private static class DefaultRemoteActionCache extends AbstractRemoteActionCache {
+  private static class DefaultRemoteActionCache extends RemoteCache {
 
     Map<Digest, ListenableFuture<byte[]>> downloadResults = new HashMap<>();
     List<ListenableFuture<?>> blockingDownloads = new ArrayList<>();

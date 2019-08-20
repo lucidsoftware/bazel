@@ -97,7 +97,7 @@ final class ExecutionServer extends ExecutionImplBase {
   private final Path workPath;
   private final Path sandboxPath;
   private final RemoteWorkerOptions workerOptions;
-  private final SimpleBlobStoreActionCache cache;
+  private final OnDiskBlobStoreActionCache cache;
   private final ConcurrentHashMap<String, ListenableFuture<ActionResult>> operationsCache;
   private final ListeningExecutorService executorService;
   private final DigestUtil digestUtil;
@@ -106,7 +106,7 @@ final class ExecutionServer extends ExecutionImplBase {
       Path workPath,
       Path sandboxPath,
       RemoteWorkerOptions workerOptions,
-      SimpleBlobStoreActionCache cache,
+      OnDiskBlobStoreActionCache cache,
       ConcurrentHashMap<String, ListenableFuture<ActionResult>> operationsCache,
       DigestUtil digestUtil) {
     this.workPath = workPath;
@@ -334,7 +334,14 @@ final class ExecutionServer extends ExecutionImplBase {
 
       ActionResult result = null;
       try {
-        result = cache.upload(actionKey, action, command, execRoot, outputs, outErr, exitCode);
+        // Always upload action outputs.
+        result = cache.uploadActionOutputs(execRoot, actionKey, action, command, outputs, outErr);
+        if (exitCode == 0) {
+          // Cache the action only if successful.
+          cache.uploadActionResult(actionKey, result);
+        } else {
+          result = null;
+        }
       } catch (ExecException e) {
         if (errStatus == null) {
           errStatus =

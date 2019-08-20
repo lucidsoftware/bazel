@@ -106,7 +106,7 @@ public class RemoteSpawnCacheTest {
   private Path execRoot;
   private SimpleSpawn simpleSpawn;
   private FakeActionInputFileCache fakeFileCache;
-  @Mock private AbstractRemoteActionCache remoteCache;
+  @Mock private RemoteCache remoteCache;
   private RemoteSpawnCache cache;
   private FileOutErr outErr;
   private final List<Pair<ProgressStatus, String>> progressUpdates = new ArrayList();
@@ -285,7 +285,7 @@ public class RemoteSpawnCacheTest {
     CacheHandle entry = cache.lookup(simpleSpawn, simplePolicy);
     assertThat(entry.hasResult()).isTrue();
     SpawnResult result = entry.getResult();
-    // All other methods on RemoteActionCache have side effects, so we verify all of them.
+    // All other methods on RemoteCache have side effects, so we verify all of them.
     verify(remoteCache).download(eq(actionResult), eq(execRoot), eq(outErr), any());
     verify(remoteCache, never())
         .upload(

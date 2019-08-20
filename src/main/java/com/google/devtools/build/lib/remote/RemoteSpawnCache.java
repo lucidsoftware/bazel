@@ -66,7 +66,7 @@ import java.util.SortedMap;
 import javax.annotation.Nullable;
 
 /** A remote {@link SpawnCache} implementation. */
-@ThreadSafe // If the RemoteActionCache implementation is thread-safe.
+@ThreadSafe // If the RemoteCache implementation is thread-safe.
 @ExecutionStrategy(
     name = {"remote-cache"},
     contextType = SpawnCache.class)
@@ -75,7 +75,7 @@ final class RemoteSpawnCache implements SpawnCache {
   private final Path execRoot;
   private final RemoteOptions options;
 
-  private final AbstractRemoteActionCache remoteCache;
+  private final RemoteCache remoteCache;
   private final String buildRequestId;
   private final String commandId;
 
@@ -94,7 +94,7 @@ final class RemoteSpawnCache implements SpawnCache {
   RemoteSpawnCache(
       Path execRoot,
       RemoteOptions options,
-      AbstractRemoteActionCache remoteCache,
+      RemoteCache remoteCache,
       String buildRequestId,
       String commandId,
       @Nullable Reporter cmdlineReporter,

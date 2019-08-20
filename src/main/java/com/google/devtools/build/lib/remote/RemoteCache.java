@@ -46,13 +46,12 @@ import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifactValue;
 import com.google.devtools.build.lib.actions.UserExecException;
 import com.google.devtools.build.lib.actions.cache.MetadataInjector;
-import com.google.devtools.build.lib.concurrent.ThreadSafety;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
-import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.ActionResultMetadata.DirectoryMetadata;
-import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.ActionResultMetadata.FileMetadata;
-import com.google.devtools.build.lib.remote.AbstractRemoteActionCache.ActionResultMetadata.SymlinkMetadata;
+import com.google.devtools.build.lib.remote.RemoteCache.ActionResultMetadata.DirectoryMetadata;
+import com.google.devtools.build.lib.remote.RemoteCache.ActionResultMetadata.FileMetadata;
+import com.google.devtools.build.lib.remote.RemoteCache.ActionResultMetadata.SymlinkMetadata;
 import com.google.devtools.build.lib.remote.common.SimpleBlobStore;
 import com.google.devtools.build.lib.remote.common.SimpleBlobStore.ActionKey;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
@@ -84,10 +83,11 @@ import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.ThreadSafe;
 
 /** A cache for storing artifacts (input and output) as well as the output of running an action. */
-@ThreadSafety.ThreadSafe
-public abstract class AbstractRemoteActionCache implements MissingDigestsFinder, AutoCloseable {
+@ThreadSafe
+public class RemoteCache implements MissingDigestsFinder, AutoCloseable {
 
   /** See {@link SpawnExecutionContext#lockOutputFiles()}. */
   @FunctionalInterface
@@ -105,93 +105,31 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
 
   protected final RemoteOptions options;
   protected final DigestUtil digestUtil;
+  protected final SimpleBlobStore protocolImpl;
 
-  public AbstractRemoteActionCache(RemoteOptions options, DigestUtil digestUtil) {
+  public RemoteCache(RemoteOptions options, DigestUtil digestUtil, SimpleBlobStore protocolImpl) {
     this.options = options;
     this.digestUtil = digestUtil;
+    this.protocolImpl = protocolImpl;
   }
 
-  /**
-   * Attempts to look up the given action in the remote cache and return its result, if present.
-   * Returns {@code null} if there is no such entry. Note that a successful result from this method
-   * does not guarantee the availability of the corresponding output files in the remote cache.
-   *
-   * @throws IOException if the remote cache is unavailable.
-   */
-  @Nullable
-  abstract ActionResult getCachedActionResult(ActionKey actionKey)
-      throws IOException, InterruptedException;
-
-  protected abstract void setCachedActionResult(ActionKey actionKey, ActionResult action)
-      throws IOException, InterruptedException;
-
-  /**
-   * Uploads a file
-   *
-   * <p>Any errors are being propagated via the returned future. If the future completes without
-   * errors the upload was successful.
-   *
-   * @param digest the digest of the file.
-   * @param file the file to upload.
-   */
-  protected abstract ListenableFuture<Void> uploadFile(Digest digest, Path file);
-
-  /**
-   * Uploads a BLOB.
-   *
-   * <p>Any errors are being propagated via the returned future. If the future completes without
-   * errors the upload was successful
-   *
-   * @param digest the digest of the blob.
-   * @param data the blob to upload.
-   */
-  protected abstract ListenableFuture<Void> uploadBlob(Digest digest, ByteString data);
-
-  /**
-   * Upload the result of a locally executed action to the remote cache.
-   *
-   * @throws IOException if there was an error uploading to the remote cache
-   * @throws ExecException if uploading any of the action outputs is not supported
-   */
-  public ActionResult upload(
-      ActionKey actionKey,
-      Action action,
-      Command command,
-      Path execRoot,
-      Collection<Path> outputs,
-      FileOutErr outErr,
-      int exitCode)
-      throws ExecException, IOException, InterruptedException {
-    ActionResult.Builder resultBuilder = ActionResult.newBuilder();
-    uploadOutputs(execRoot, actionKey, action, command, outputs, outErr, resultBuilder);
-    resultBuilder.setExitCode(exitCode);
-    ActionResult result = resultBuilder.build();
-    if (exitCode == 0 && !action.getDoNotCache()) {
-      setCachedActionResult(actionKey, result);
-    }
-    return result;
+  public ActionResult getCachedActionResult(ActionKey actionKey) throws IOException, InterruptedException  {
+    return Utils.getFromFuture(protocolImpl.downloadActionResult(actionKey));
   }
 
-  public ActionResult upload(
-      ActionKey actionKey,
-      Action action,
-      Command command,
-      Path execRoot,
-      Collection<Path> outputs,
-      FileOutErr outErr)
-      throws ExecException, IOException, InterruptedException {
-    return upload(actionKey, action, command, execRoot, outputs, outErr, /* exitCode= */ 0);
+  public ListenableFuture<ImmutableSet<Digest>> findMissingDigests(Iterable<Digest> digests) {
+    return Futures.immediateFuture(ImmutableSet.copyOf(digests));
   }
 
-  private void uploadOutputs(
+  protected ActionResult uploadActionOutputs(
       Path execRoot,
       ActionKey actionKey,
       Action action,
       Command command,
       Collection<Path> files,
-      FileOutErr outErr,
-      ActionResult.Builder result)
+      FileOutErr outErr)
       throws ExecException, IOException, InterruptedException {
+    ActionResult.Builder result = ActionResult.newBuilder();
     UploadManifest manifest =
         new UploadManifest(
             digestUtil,
@@ -209,19 +147,19 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
     digests.addAll(digestToFile.keySet());
     digests.addAll(digestToBlobs.keySet());
 
-    ImmutableSet<Digest> digestsToUpload = Utils.getFromFuture(findMissingDigests(digests));
+    ImmutableSet<Digest> digestsToUpload = protocolImpl.findMissingBlobs(digests);
     ImmutableList.Builder<ListenableFuture<Void>> uploads = ImmutableList.builder();
     for (Digest digest : digestsToUpload) {
       Path file = digestToFile.get(digest);
       if (file != null) {
-        uploads.add(uploadFile(digest, file));
+        uploads.add(protocolImpl.uploadFile(digest, file));
       } else {
         ByteString blob = digestToBlobs.get(digest);
         if (blob == null) {
           String message = "FindMissingBlobs call returned an unknown digest: " + digest;
           throw new IOException(message);
         }
-        uploads.add(uploadBlob(digest, blob));
+        uploads.add(protocolImpl.uploadBlob(digest, blob));
       }
     }
 
@@ -233,9 +171,10 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
     if (manifest.getStdoutDigest() != null) {
       result.setStdoutDigest(manifest.getStdoutDigest());
     }
+    return result.build();
   }
 
-  private static void waitForUploads(List<ListenableFuture<Void>> uploads)
+  static void waitForUploads(List<ListenableFuture<Void>> uploads)
       throws IOException, InterruptedException {
     try {
       for (ListenableFuture<Void> upload : uploads) {
@@ -255,11 +194,24 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
   }
 
   /**
-   * Downloads a blob with a content hash {@code digest} to {@code out}.
+   * Upload the result of a locally executed action to the remote cache.
    *
-   * @return a future that completes after the download completes (succeeds / fails).
+   * @throws IOException if there was an error uploading to the remote cache
+   * @throws ExecException if uploading any of the action outputs is not supported
    */
-  protected abstract ListenableFuture<Void> downloadBlob(Digest digest, OutputStream out);
+  public ActionResult upload(
+      SimpleBlobStore.ActionKey actionKey,
+      Action action,
+      Command command,
+      Path execRoot,
+      Collection<Path> files,
+      FileOutErr outErr)
+      throws ExecException, IOException, InterruptedException {
+    ActionResult result =
+        uploadActionOutputs(execRoot, actionKey, action, command, files, outErr);
+    protocolImpl.uploadActionResult(actionKey, result);
+    return result;
+  }
 
   /**
    * Downloads a blob with content hash {@code digest} and stores its content in memory.
@@ -274,7 +226,7 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
     ByteArrayOutputStream bOut = new ByteArrayOutputStream((int) digest.getSizeBytes());
     SettableFuture<byte[]> outerF = SettableFuture.create();
     Futures.addCallback(
-        downloadBlob(digest, bOut),
+        protocolImpl.downloadBlob(digest, bOut),
         new FutureCallback<Void>() {
           @Override
           public void onSuccess(Void aVoid) {
@@ -486,7 +438,7 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
 
     OutputStream out = new LazyFileOutputStream(path);
     SettableFuture<Void> outerF = SettableFuture.create();
-    ListenableFuture<Void> f = downloadBlob(digest, out);
+    ListenableFuture<Void> f = protocolImpl.downloadBlob(digest, out);
     Futures.addCallback(
         f,
         new FutureCallback<Void>() {
@@ -525,7 +477,7 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
     } else if (result.hasStdoutDigest()) {
       downloads.add(
           Futures.transform(
-              downloadBlob(result.getStdoutDigest(), outErr.getOutputStream()),
+              protocolImpl.downloadBlob(result.getStdoutDigest(), outErr.getOutputStream()),
               (d) -> null,
               directExecutor()));
     }
@@ -535,7 +487,7 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
     } else if (result.hasStderrDigest()) {
       downloads.add(
           Futures.transform(
-              downloadBlob(result.getStderrDigest(), outErr.getErrorStream()),
+              protocolImpl.downloadBlob(result.getStderrDigest(), outErr.getErrorStream()),
               (d) -> null,
               directExecutor()));
     }
@@ -1001,7 +953,9 @@ public abstract class AbstractRemoteActionCache implements MissingDigestsFinder,
 
   /** Release resources associated with the cache. The cache may not be used after calling this. */
   @Override
-  public abstract void close();
+  public void close() {
+    protocolImpl.close();
+  }
 
   /**
    * Creates an {@link OutputStream} that isn't actually opened until the first data is written.

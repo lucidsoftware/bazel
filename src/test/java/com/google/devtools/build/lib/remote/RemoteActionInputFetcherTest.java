@@ -88,7 +88,7 @@ public class RemoteActionInputFetcherTest {
     Artifact a1 = createRemoteArtifact("file1", "hello world", metadata, cacheEntries);
     Artifact a2 = createRemoteArtifact("file2", "fizz buzz", metadata, cacheEntries);
     MetadataProvider metadataProvider = new StaticMetadataProvider(metadata);
-    AbstractRemoteActionCache remoteCache =
+    RemoteCache remoteCache =
         new StaticRemoteActionCache(options, digestUtil, cacheEntries);
     RemoteActionInputFetcher actionInputFetcher =
         new RemoteActionInputFetcher(remoteCache, execRoot, Context.current());
@@ -112,7 +112,7 @@ public class RemoteActionInputFetcherTest {
   public void testStagingVirtualActionInput() throws Exception {
     // arrange
     MetadataProvider metadataProvider = new StaticMetadataProvider(new HashMap<>());
-    AbstractRemoteActionCache remoteCache =
+    RemoteCache remoteCache =
         new StaticRemoteActionCache(options, digestUtil, new HashMap<>());
     RemoteActionInputFetcher actionInputFetcher =
         new RemoteActionInputFetcher(remoteCache, execRoot, Context.current());
@@ -138,7 +138,7 @@ public class RemoteActionInputFetcherTest {
     Artifact a =
         createRemoteArtifact("file1", "hello world", metadata, /* cacheEntries= */ new HashMap<>());
     MetadataProvider metadataProvider = new StaticMetadataProvider(metadata);
-    AbstractRemoteActionCache remoteCache =
+    RemoteCache remoteCache =
         new StaticRemoteActionCache(options, digestUtil, new HashMap<>());
     RemoteActionInputFetcher actionInputFetcher =
         new RemoteActionInputFetcher(remoteCache, execRoot, Context.current());
@@ -163,7 +163,7 @@ public class RemoteActionInputFetcherTest {
     Artifact a = ActionsTestUtil.createArtifact(artifactRoot, p);
     FileArtifactValue f = FileArtifactValue.createForTesting(a);
     MetadataProvider metadataProvider = new StaticMetadataProvider(ImmutableMap.of(a, f));
-    AbstractRemoteActionCache remoteCache =
+    RemoteCache remoteCache =
         new StaticRemoteActionCache(options, digestUtil, new HashMap<>());
     RemoteActionInputFetcher actionInputFetcher =
         new RemoteActionInputFetcher(remoteCache, execRoot, Context.current());
@@ -182,7 +182,7 @@ public class RemoteActionInputFetcherTest {
     Map<ActionInput, FileArtifactValue> metadata = new HashMap<>();
     Map<Digest, ByteString> cacheEntries = new HashMap<>();
     Artifact a1 = createRemoteArtifact("file1", "hello world", metadata, cacheEntries);
-    AbstractRemoteActionCache remoteCache =
+    RemoteCache remoteCache =
         new StaticRemoteActionCache(options, digestUtil, cacheEntries);
     RemoteActionInputFetcher actionInputFetcher =
         new RemoteActionInputFetcher(remoteCache, execRoot, Context.current());
@@ -214,7 +214,7 @@ public class RemoteActionInputFetcherTest {
     return a;
   }
 
-  private static class StaticRemoteActionCache extends AbstractRemoteActionCache {
+  private static class StaticRemoteActionCache extends RemoteCache {
 
     private final ImmutableMap<Digest, ByteString> cacheEntries;
 

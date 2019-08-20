@@ -112,12 +112,12 @@ public class SimpleBlobStoreActionCacheTest {
     retryService.shutdownNow();
   }
 
-  private SimpleBlobStoreActionCache newClient() {
+  private RemoteCache newClient() {
     return newClient(new ConcurrentHashMap<>());
   }
 
-  private SimpleBlobStoreActionCache newClient(ConcurrentMap<String, byte[]> map) {
-    return new SimpleBlobStoreActionCache(
+  private RemoteCache newClient(ConcurrentMap<String, byte[]> map) {
+    return new RemoteCache(
         Options.getDefaults(RemoteOptions.class),
         new ConcurrentMapBlobStore(map),
         DIGEST_UTIL);

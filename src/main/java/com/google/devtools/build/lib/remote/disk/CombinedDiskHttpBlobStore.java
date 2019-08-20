@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.remote.disk;
 import build.bazel.remote.execution.v2.ActionResult;
 import build.bazel.remote.execution.v2.Digest;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
@@ -79,6 +80,11 @@ public final class CombinedDiskHttpBlobStore implements SimpleBlobStore {
       return Futures.immediateFailedFuture(e);
     }
     return Futures.immediateFuture(null);
+  }
+
+  @Override
+  public ImmutableSet<Digest> findMissingBlobs(Iterable<Digest> digests) {
+    return ImmutableSet.copyOf(digests);
   }
 
   private Path newTempPath(){

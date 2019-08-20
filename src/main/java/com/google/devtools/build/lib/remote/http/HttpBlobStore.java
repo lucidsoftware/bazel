@@ -16,13 +16,21 @@ package com.google.devtools.build.lib.remote.http;
 import build.bazel.remote.execution.v2.ActionResult;
 import build.bazel.remote.execution.v2.Digest;
 import com.google.auth.Credentials;
+import com.google.common.base.Ascii;
+import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.SimpleBlobStore;
+import com.google.devtools.build.lib.remote.options.RemoteOptions;
+import com.google.devtools.build.lib.remote.util.DigestUtil;
 import com.google.devtools.build.lib.remote.util.Utils;
+import com.google.devtools.build.lib.util.AbruptExitException;
+import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
 import io.netty.bootstrap.Bootstrap;
@@ -70,6 +78,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.NoSuchElementException;
@@ -82,6 +91,7 @@ import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLException;
 
 /**
  * Implementation of {@link SimpleBlobStore} that can talk to a HTTP/1.1 backend.
@@ -122,6 +132,8 @@ public final class HttpBlobStore implements SimpleBlobStore {
   private final int timeoutSeconds;
   private final ImmutableList<Entry<String, String>> extraHttpHeaders;
   private final boolean useTls;
+  private final boolean verifyDownloadsChecksum;
+  private final DigestUtil digestUtil;
 
   private final Object closeLock = new Object();
 
@@ -140,6 +152,8 @@ public final class HttpBlobStore implements SimpleBlobStore {
       URI uri,
       int timeoutSeconds,
       int remoteMaxConnections,
+      boolean verifyDownloadsChecksum,
+      DigestUtil digestUtil,
       ImmutableList<Entry<String, String>> extraHttpHeaders,
       @Nullable final Credentials creds)
       throws Exception {
@@ -149,6 +163,8 @@ public final class HttpBlobStore implements SimpleBlobStore {
         uri,
         timeoutSeconds,
         remoteMaxConnections,
+        verifyDownloadsChecksum,
+        digestUtil,
         extraHttpHeaders,
         creds,
         null);
@@ -159,6 +175,8 @@ public final class HttpBlobStore implements SimpleBlobStore {
       URI uri,
       int timeoutSeconds,
       int remoteMaxConnections,
+      boolean verifyDownloadsChecksum,
+      DigestUtil digestUtil,
       ImmutableList<Entry<String, String>> extraHttpHeaders,
       @Nullable final Credentials creds)
       throws Exception {
@@ -170,6 +188,8 @@ public final class HttpBlobStore implements SimpleBlobStore {
           uri,
           timeoutSeconds,
           remoteMaxConnections,
+          verifyDownloadsChecksum,
+          digestUtil,
           extraHttpHeaders,
           creds,
           domainSocketAddress);
@@ -180,11 +200,42 @@ public final class HttpBlobStore implements SimpleBlobStore {
           uri,
           timeoutSeconds,
           remoteMaxConnections,
+          verifyDownloadsChecksum,
+          digestUtil,
           extraHttpHeaders,
           creds,
           domainSocketAddress);
     } else {
       throw new Exception("Unix domain sockets are unsupported on this platform");
+    }
+  }
+
+  public static HttpBlobStore createFromOptions(RemoteOptions options, DigestUtil digestUtil,
+      @Nullable Credentials creds) throws AbruptExitException  {
+    try {
+      URI uri = new URI(options.remoteCache);
+
+      if (!Strings.isNullOrEmpty(options.remoteProxy)) {
+        if (!options.remoteProxy.startsWith("unix:")) {
+          throw new AbruptExitException(
+              String.format("'%s' is not a valid unix domain socket URI", options.remoteProxy),
+              ExitCode.COMMAND_LINE_ERROR);
+        }
+
+        return HttpBlobStore.create(new DomainSocketAddress(options.remoteProxy.replaceFirst("^unix:", "")),
+            uri, options.remoteTimeout, options.remoteMaxConnections, options.remoteVerifyDownloads, digestUtil,
+            ImmutableList.copyOf(options.remoteHeaders), creds);
+      } else {
+        return HttpBlobStore.create(uri, options.remoteTimeout, options.remoteMaxConnections,
+            options.remoteVerifyDownloads, digestUtil, ImmutableList.copyOf(options.remoteHeaders),
+            creds);
+      }
+    } catch (URISyntaxException e) {
+      throw new AbruptExitException(
+          String.format("'%s' is not a valid URI: %s", options.remoteCache, e.getMessage()),
+          ExitCode.COMMAND_LINE_ERROR, e);
+    } catch (Exception e) {
+      throw new AbruptExitException(e.getMessage(), ExitCode.COMMAND_LINE_ERROR, e);
     }
   }
 
@@ -194,10 +245,11 @@ public final class HttpBlobStore implements SimpleBlobStore {
       URI uri,
       int timeoutSeconds,
       int remoteMaxConnections,
+      boolean verifyDownloadsChecksum,
+      DigestUtil digestUtil,
       ImmutableList<Entry<String, String>> extraHttpHeaders,
       @Nullable final Credentials creds,
-      @Nullable SocketAddress socketAddress)
-      throws Exception {
+      @Nullable SocketAddress socketAddress) throws URISyntaxException, SSLException {
     useTls = uri.getScheme().equals("https");
     if (uri.getPort() == -1) {
       int port = useTls ? 443 : 80;
@@ -261,6 +313,8 @@ public final class HttpBlobStore implements SimpleBlobStore {
     this.creds = creds;
     this.timeoutSeconds = timeoutSeconds;
     this.extraHttpHeaders = extraHttpHeaders;
+    this.verifyDownloadsChecksum = verifyDownloadsChecksum;
+    this.digestUtil = digestUtil;
   }
 
   @SuppressWarnings("FutureReturnValueIgnored")
@@ -419,6 +473,10 @@ public final class HttpBlobStore implements SimpleBlobStore {
 
   @Override
   public ListenableFuture<Void> downloadBlob(Digest digest, OutputStream out) {
+    if (verifyDownloadsChecksum) {
+      return Utils.checksumDownload(digest, out, digestUtil,
+          (d, o) -> get(d, o, /* casDownload= */ true));
+    }
     return get(digest, out, /* casDownload= */ true);
   }
 
@@ -605,6 +663,11 @@ public final class HttpBlobStore implements SimpleBlobStore {
       return Futures.immediateFailedFuture(e);
     }
     return Futures.immediateFuture(null);
+  }
+
+  @Override
+  public ImmutableSet<Digest> findMissingBlobs(Iterable<Digest> digests) {
+    return ImmutableSet.copyOf(digests);
   }
 
   @SuppressWarnings("FutureReturnValueIgnored")

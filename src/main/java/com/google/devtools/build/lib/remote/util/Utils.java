@@ -16,9 +16,12 @@ package com.google.devtools.build.lib.remote.util;
 import build.bazel.remote.execution.v2.ActionResult;
 import build.bazel.remote.execution.v2.Digest;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.hash.HashingOutputStream;
+import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -142,6 +145,47 @@ public class Utils {
     }, MoreExecutors.directExecutor());
     return Futures.catching(actionResultDownload, CacheNotFoundException.class, (e) -> null,
         MoreExecutors.directExecutor());
+  }
+
+  public static void compareOutputDigests(String expectedHash, String actualHash) throws IOException {
+    if (!expectedHash.equals(actualHash)) {
+      String msg =
+          String.format(
+              "An output download failed, because the expected hash"
+                  + "'%s' did not match the received hash '%s'.",
+              expectedHash, actualHash);
+      throw new IOException(msg);
+    }
+  }
+
+  public static ListenableFuture<Void> checksumDownload(Digest expectedDigest, OutputStream out, DigestUtil digestUtil,
+      BiFunction<Digest, OutputStream, ListenableFuture<Void>> downloadFunction) {
+    SettableFuture<Void> outerF = SettableFuture.create();
+    @Nullable
+    HashingOutputStream hashOut = digestUtil.newHashingOutputStream(out);
+    Futures.addCallback(
+        downloadFunction.apply(expectedDigest, hashOut != null ? hashOut : out),
+        new FutureCallback<Void>() {
+          @Override
+          public void onSuccess(Void unused) {
+            try {
+              if (hashOut != null) {
+                compareOutputDigests(expectedDigest.getHash(), DigestUtil.hashCodeToString(hashOut.hash()));
+              }
+              out.flush();
+              outerF.set(null);
+            } catch (IOException e) {
+              outerF.setException(e);
+            }
+          }
+
+          @Override
+          public void onFailure(Throwable t) {
+            outerF.setException(t);
+          }
+        },
+        MoreExecutors.directExecutor());
+    return outerF;
   }
 
   /** An in-memory output file. */

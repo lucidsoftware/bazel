@@ -14,8 +14,11 @@
 
 package com.google.devtools.build.lib.remote;
 
+import static com.google.common.base.Strings.isNullOrEmpty;
+
 import build.bazel.remote.execution.v2.DigestFunction;
 import build.bazel.remote.execution.v2.ServerCapabilities;
+import com.google.common.base.Ascii;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -43,6 +46,10 @@ import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.exec.ExecutorBuilder;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
+import com.google.devtools.build.lib.remote.common.SimpleBlobStore;
+import com.google.devtools.build.lib.remote.disk.CombinedDiskHttpBlobStore;
+import com.google.devtools.build.lib.remote.disk.OnDiskBlobStore;
+import com.google.devtools.build.lib.remote.http.HttpBlobStore;
 import com.google.devtools.build.lib.remote.logging.LoggingInterceptor;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
@@ -142,6 +149,30 @@ public final class RemoteModule extends BlazeModule {
     return !Strings.isNullOrEmpty(options.remoteExecutor);
   }
 
+  /** Returns true if 'options.remoteCache' uses 'grpc' or an empty scheme */
+  public static boolean grpcCacheEnabled(RemoteOptions options) {
+    if (isNullOrEmpty(options.remoteCache)) {
+      return false;
+    }
+    // TODO(ishikhman): add proper URI validation/parsing for remote options
+    return !(Ascii.toLowerCase(options.remoteCache).startsWith("http://")
+        || Ascii.toLowerCase(options.remoteCache).startsWith("https://"));
+  }
+
+  private static boolean httpCacheEnabled(RemoteOptions options) {
+    return options.remoteCache != null
+        && (Ascii.toLowerCase(options.remoteCache).startsWith("http://")
+        || Ascii.toLowerCase(options.remoteCache).startsWith("https://"));
+  }
+
+  private static boolean diskCacheEnabled(RemoteOptions options) {
+    return options.diskCache != null && !options.diskCache.isEmpty();
+  }
+
+  public static boolean remoteExecutionEnabled(RemoteOptions options) {
+    return !Strings.isNullOrEmpty(options.remoteExecutor);
+  }
+
   @Override
   public void beforeCommand(CommandEnvironment env) throws AbruptExitException {
     Preconditions.checkState(actionContextProvider == null, "actionContextProvider must be null");
@@ -160,18 +191,20 @@ public final class RemoteModule extends BlazeModule {
     DigestHashFunction hashFn = env.getRuntime().getFileSystem().getDigestFunction();
     DigestUtil digestUtil = new DigestUtil(hashFn);
 
-    boolean enableBlobStoreCache = SimpleBlobStoreFactory.isRemoteCacheOptions(remoteOptions);
-    boolean enableGrpcCache = GrpcRemoteCache.isRemoteCacheOptions(remoteOptions);
-    boolean enableRemoteExecution = shouldEnableRemoteExecution(remoteOptions);
-    if (enableBlobStoreCache && enableRemoteExecution) {
+    boolean httpCacheEnabled = httpCacheEnabled(remoteOptions);
+    boolean diskCacheEnabled = diskCacheEnabled(remoteOptions);
+    boolean grpcCacheEnabled = grpcCacheEnabled(remoteOptions);
+    boolean remoteExecutionEnabled = remoteExecutionEnabled(remoteOptions);
+
+    if (!httpCacheEnabled && !diskCacheEnabled && !grpcCacheEnabled && !remoteExecutionEnabled) {
+      // Quit if no remote caching or execution was enabled.
+      return;
+    }
+
+    if ((httpCacheEnabled || diskCacheEnabled) && remoteExecutionEnabled) {
       throw new AbruptExitException(
           "Cannot combine gRPC based remote execution with local disk or HTTP-based caching",
           ExitCode.COMMAND_LINE_ERROR);
-    }
-
-    if (!enableBlobStoreCache && !enableGrpcCache && !enableRemoteExecution) {
-      // Quit if no remote caching or execution was enabled.
-      return;
     }
 
     env.getEventBus().register(this);
@@ -195,8 +228,9 @@ public final class RemoteModule extends BlazeModule {
       ReferenceCountedChannel cacheChannel = null;
       ReferenceCountedChannel execChannel = null;
       RemoteRetrier rpcRetrier = null;
+
       // Initialize the gRPC channels and capabilities service, when relevant.
-      if (!Strings.isNullOrEmpty(remoteOptions.remoteExecutor)) {
+      if (remoteExecutionEnabled) {
         execChannel =
             new ReferenceCountedChannel(
                 GoogleAuthUtils.newChannel(
@@ -205,16 +239,15 @@ public final class RemoteModule extends BlazeModule {
                     interceptors.toArray(new ClientInterceptor[0])));
       }
       RemoteRetrier executeRetrier = null;
-      AbstractRemoteActionCache cache = null;
-      if (enableGrpcCache || !Strings.isNullOrEmpty(remoteOptions.remoteExecutor)) {
+      RemoteCache cache = null;
+      if (grpcCacheEnabled || remoteExecutionEnabled) {
         rpcRetrier =
               new RemoteRetrier(
                   remoteOptions,
                   RemoteRetrier.RETRIABLE_GRPC_ERRORS,
                   retryScheduler,
                   Retrier.ALLOW_ALL_CALLS);
-        if (!Strings.isNullOrEmpty(remoteOptions.remoteCache)
-            && !remoteOptions.remoteCache.equals(remoteOptions.remoteExecutor)) {
+        if (grpcCacheEnabled && !remoteOptions.remoteCache.equals(remoteOptions.remoteExecutor)) {
           cacheChannel =
               new ReferenceCountedChannel(
                   GoogleAuthUtils.newChannel(
@@ -257,14 +290,10 @@ public final class RemoteModule extends BlazeModule {
                 remoteOptions.remoteTimeout,
                 rpcRetrier);
         cacheChannel.release();
-        cache =
-            new GrpcRemoteCache(
-                cacheChannel.retain(),
-                credentials,
-                remoteOptions,
-                rpcRetrier,
-                digestUtil,
-                uploader.retain());
+
+        GrpcRemoteCacheProtocol grpcCache = new GrpcRemoteCacheProtocol(cacheChannel.retain(), credentials,
+            uploader.retain(), rpcRetrier, remoteOptions, digestUtil);
+        cache = new GrpcRemoteExecutionCache(remoteOptions, digestUtil, grpcCache);
         uploader.release();
         Context requestContext =
             TracingMetadataUtils.contextWithMetadata(buildRequestId, invocationId, "bes-upload");
@@ -275,22 +304,25 @@ public final class RemoteModule extends BlazeModule {
                 cacheChannel.authority(),
                 requestContext,
                 remoteOptions.remoteInstanceName));
-      }
-
-      if (enableBlobStoreCache) {
-        executeRetrier = null;
-        cache =
-            new SimpleBlobStoreActionCache(
-                remoteOptions,
-                SimpleBlobStoreFactory.create(
-                    remoteOptions,
-                    GoogleAuthUtils.newCredentials(authAndTlsOptions),
-                    Preconditions.checkNotNull(env.getWorkingDirectory(), "workingDirectory")),
-                digestUtil);
+      } else if (httpCacheEnabled && diskCacheEnabled) {
+        OnDiskBlobStore diskCache = OnDiskBlobStore.create(env.getWorkingDirectory(),
+            remoteOptions.diskCache, digestUtil, remoteOptions.remoteVerifyDownloads);
+        SimpleBlobStore httpCache = HttpBlobStore.createFromOptions(remoteOptions, digestUtil,
+            GoogleAuthUtils.newCredentials(authAndTlsOptions));
+        cache = new RemoteCache(remoteOptions, digestUtil,
+            new CombinedDiskHttpBlobStore(diskCache, httpCache));
+      } else if (httpCacheEnabled) {
+        SimpleBlobStore httpCache = HttpBlobStore.createFromOptions(remoteOptions, digestUtil,
+            GoogleAuthUtils.newCredentials(authAndTlsOptions));
+        cache = new RemoteCache(remoteOptions, digestUtil, httpCache);
+      } else if (diskCacheEnabled) {
+        SimpleBlobStore diskCache = OnDiskBlobStore.create(env.getWorkingDirectory(),
+            remoteOptions.diskCache, digestUtil, remoteOptions.remoteVerifyDownloads);
+        cache = new RemoteCache(remoteOptions, digestUtil, diskCache);
       }
 
       GrpcRemoteExecutor executor = null;
-      if (enableRemoteExecution) {
+      if (remoteExecutionEnabled) {
         RemoteRetrier retrier =
             new RemoteRetrier(
                 remoteOptions,
@@ -303,12 +335,9 @@ public final class RemoteModule extends BlazeModule {
                 GoogleAuthUtils.newCallCredentials(authAndTlsOptions),
                 retrier);
         execChannel.release();
-        Preconditions.checkState(
-            cache instanceof GrpcRemoteCache,
-            "Only the gRPC cache is support for remote execution");
         actionContextProvider =
             RemoteActionContextProvider.createForRemoteExecution(
-                env, (GrpcRemoteCache) cache, executor, executeRetrier, digestUtil, logDir);
+                env, (GrpcRemoteExecutionCache) cache, executor, executeRetrier, digestUtil, logDir);
       } else if (cache != null) {
         actionContextProvider =
             RemoteActionContextProvider.createForRemoteCaching(
