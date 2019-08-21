@@ -178,6 +178,7 @@ public final class RemoteModule extends BlazeModule {
       RemoteRetrier executeRetrier = null;
       AbstractRemoteActionCache cache = null;
       if (enableGrpcCache || !Strings.isNullOrEmpty(remoteOptions.remoteExecutor)) {
+        authHeadersProvider = env.getRuntime().getAuthHeadersProvidersMap().get("google");
         rpcRetrier =
               new RemoteRetrier(
                   remoteOptions,
