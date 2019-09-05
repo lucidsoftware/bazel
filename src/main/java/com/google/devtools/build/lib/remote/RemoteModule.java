@@ -297,7 +297,7 @@ public final class RemoteModule extends BlazeModule {
           OnDiskBlobStore diskCache = OnDiskBlobStore.create(env.getWorkingDirectory(),
             remoteOptions.diskCache, digestUtil, remoteOptions.remoteVerifyDownloads);
           cache = new GrpcRemoteExecutionCache(remoteOptions, digestUtil,
-            new CombinedDiskRemoteBlobStore(diskCache, grpcCache));
+            new CombinedDiskRemoteBlobStore(diskCache, grpcCache, remoteOptions));
         } else {
           cache = new GrpcRemoteExecutionCache(remoteOptions, digestUtil, grpcCache);
         }
@@ -317,7 +317,7 @@ public final class RemoteModule extends BlazeModule {
         SimpleBlobStore httpCache = HttpBlobStore.createFromOptions(remoteOptions, digestUtil,
             GoogleAuthUtils.newCredentials(authAndTlsOptions));
         cache = new RemoteCache(remoteOptions, digestUtil,
-            new CombinedDiskRemoteBlobStore(diskCache, httpCache));
+            new CombinedDiskRemoteBlobStore(diskCache, httpCache, remoteOptions));
       } else if (httpCacheEnabled) {
         SimpleBlobStore httpCache = HttpBlobStore.createFromOptions(remoteOptions, digestUtil,
             GoogleAuthUtils.newCredentials(authAndTlsOptions));
