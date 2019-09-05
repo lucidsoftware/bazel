@@ -135,7 +135,7 @@ public final class RemoteCacheClientFactory {
         new DiskCacheClient(cacheDir, options.remoteVerifyDownloads, digestUtil);
     RemoteCacheClient httpCache = createHttp(options, cred, digestUtil);
 
-    return new CombinedDiskRemoteCacheClient(diskCache, httpCache);
+    return new CombinedDiskRemoteCacheClient(diskCache, httpCache, options);
   }
 
   private static boolean isDiskCache(RemoteOptions options) {

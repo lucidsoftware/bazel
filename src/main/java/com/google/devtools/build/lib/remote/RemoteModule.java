@@ -279,7 +279,7 @@ public final class RemoteModule extends BlazeModule {
               cacheDir,
               remoteOptions.remoteVerifyDownloads,
               digestUtil);
-          cacheClient = new CombinedDiskRemoteCacheClient(diskCacheClient, grpcCacheClient);
+          cacheClient = new CombinedDiskRemoteCacheClient(diskCacheClient, grpcCacheClient, remoteOptions);
         } else {
           cacheClient = grpcCacheClient;
         }
