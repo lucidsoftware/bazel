@@ -47,7 +47,7 @@ import com.google.devtools.build.lib.exec.ExecutorBuilder;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.SimpleBlobStore;
-import com.google.devtools.build.lib.remote.disk.CombinedDiskHttpBlobStore;
+import com.google.devtools.build.lib.remote.disk.CombinedDiskRemoteBlobStore;
 import com.google.devtools.build.lib.remote.disk.OnDiskBlobStore;
 import com.google.devtools.build.lib.remote.http.HttpBlobStore;
 import com.google.devtools.build.lib.remote.logging.LoggingInterceptor;
@@ -293,7 +293,14 @@ public final class RemoteModule extends BlazeModule {
 
         GrpcRemoteCacheProtocol grpcCache = new GrpcRemoteCacheProtocol(cacheChannel.retain(), credentials,
             uploader.retain(), rpcRetrier, remoteOptions, digestUtil);
-        cache = new GrpcRemoteExecutionCache(remoteOptions, digestUtil, grpcCache);
+        if (diskCacheEnabled) {
+          OnDiskBlobStore diskCache = OnDiskBlobStore.create(env.getWorkingDirectory(),
+            remoteOptions.diskCache, digestUtil, remoteOptions.remoteVerifyDownloads);
+          cache = new GrpcRemoteExecutionCache(remoteOptions, digestUtil,
+            new CombinedDiskRemoteBlobStore(diskCache, grpcCache));
+        } else {
+          cache = new GrpcRemoteExecutionCache(remoteOptions, digestUtil, grpcCache);
+        }
         uploader.release();
         Context requestContext =
             TracingMetadataUtils.contextWithMetadata(buildRequestId, invocationId, "bes-upload");
@@ -310,7 +317,7 @@ public final class RemoteModule extends BlazeModule {
         SimpleBlobStore httpCache = HttpBlobStore.createFromOptions(remoteOptions, digestUtil,
             GoogleAuthUtils.newCredentials(authAndTlsOptions));
         cache = new RemoteCache(remoteOptions, digestUtil,
-            new CombinedDiskHttpBlobStore(diskCache, httpCache));
+            new CombinedDiskRemoteBlobStore(diskCache, httpCache));
       } else if (httpCacheEnabled) {
         SimpleBlobStore httpCache = HttpBlobStore.createFromOptions(remoteOptions, digestUtil,
             GoogleAuthUtils.newCredentials(authAndTlsOptions));

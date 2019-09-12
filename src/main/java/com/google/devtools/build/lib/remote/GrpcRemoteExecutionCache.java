@@ -14,6 +14,7 @@ import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.remote.merkletree.MerkleTree;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.util.DigestUtil;
+import com.google.devtools.build.lib.remote.common.SimpleBlobStore;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.Message;
 import java.io.IOException;
@@ -23,7 +24,7 @@ public class GrpcRemoteExecutionCache extends RemoteCache {
 
   public GrpcRemoteExecutionCache(RemoteOptions options,
       DigestUtil digestUtil,
-      GrpcRemoteCacheProtocol protocolImpl) {
+      SimpleBlobStore protocolImpl) {
     super(options, digestUtil, protocolImpl);
   }
 

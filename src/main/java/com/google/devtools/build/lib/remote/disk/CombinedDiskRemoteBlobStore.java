@@ -33,12 +33,12 @@ import java.util.concurrent.ExecutionException;
  * remote blob store. If a blob isn't found in the first store, the second store is used, and the
  * blob added to the first. Put puts the blob on both stores.
  */
-public final class CombinedDiskHttpBlobStore implements SimpleBlobStore {
+public final class CombinedDiskRemoteBlobStore implements SimpleBlobStore {
 
   private final SimpleBlobStore remoteCache;
   private final OnDiskBlobStore diskCache;
 
-  public CombinedDiskHttpBlobStore(OnDiskBlobStore diskCache, SimpleBlobStore remoteCache) {
+  public CombinedDiskRemoteBlobStore(OnDiskBlobStore diskCache, SimpleBlobStore remoteCache) {
     this.diskCache = Preconditions.checkNotNull(diskCache);
     this.remoteCache = Preconditions.checkNotNull(remoteCache);
   }
