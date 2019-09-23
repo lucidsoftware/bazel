@@ -199,8 +199,8 @@ public class WorkerMultiplexer extends Thread {
       } catch (IOException e) {
         isUnparseable = true;
         releaseAllSemaphores();
-        logger.warning("IOException was caught while waiting for worker response. "
-            + "It could because the worker returned unparseable response.");
+        // logger.warning("IOException was caught while waiting for worker response. "
+        //     + "It could because the worker returned unparseable response.");
       } catch (InterruptedException e) {
         logger.warning("InterruptedException was caught while waiting for worker response. "
             + "It could because the multiplexer was interrupted.");
