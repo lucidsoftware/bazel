@@ -19,7 +19,7 @@ import com.google.common.base.Ascii;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient;
-import com.google.devtools.build.lib.remote.disk.CombinedDiskHttpCacheClient;
+import com.google.devtools.build.lib.remote.disk.CombinedDiskRemoteCacheClient;
 import com.google.devtools.build.lib.remote.disk.DiskCacheClient;
 import com.google.devtools.build.lib.remote.http.HttpCacheClient;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
@@ -135,7 +135,7 @@ public final class RemoteCacheClientFactory {
         new DiskCacheClient(cacheDir, options.remoteVerifyDownloads, digestUtil);
     RemoteCacheClient httpCache = createHttp(options, cred, digestUtil);
 
-    return new CombinedDiskHttpCacheClient(diskCache, httpCache);
+    return new CombinedDiskRemoteCacheClient(diskCache, httpCache);
   }
 
   private static boolean isDiskCache(RemoteOptions options) {

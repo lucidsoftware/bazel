@@ -44,6 +44,8 @@ import com.google.devtools.build.lib.exec.ExecutorBuilder;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient;
+import com.google.devtools.build.lib.remote.disk.CombinedDiskRemoteCacheClient;
+import com.google.devtools.build.lib.remote.disk.DiskCacheClient;
 import com.google.devtools.build.lib.remote.logging.LoggingInterceptor;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
 import com.google.devtools.build.lib.remote.options.RemoteOutputsMode;
@@ -260,7 +262,7 @@ public final class RemoteModule extends BlazeModule {
                 remoteOptions.remoteTimeout,
                 rpcRetrier);
         cacheChannel.release();
-        cacheClient =
+        GrpcCacheClient grpcCacheClient =
             new GrpcCacheClient(
                 cacheChannel.retain(),
                 credentials,
@@ -268,6 +270,19 @@ public final class RemoteModule extends BlazeModule {
                 rpcRetrier,
                 digestUtil,
                 uploader.retain());
+        if (remoteOptions.diskCache != null && !remoteOptions.diskCache.isEmpty()) {
+          Path workingDirectory =
+              Preconditions.checkNotNull(env.getWorkingDirectory(), "workingDirectory");
+          Path cacheDir =
+              workingDirectory.getRelative(Preconditions.checkNotNull(remoteOptions.diskCache, "diskCachePath"));
+          DiskCacheClient diskCacheClient = new DiskCacheClient(
+              cacheDir,
+              remoteOptions.remoteVerifyDownloads,
+              digestUtil);
+          cacheClient = new CombinedDiskRemoteCacheClient(diskCacheClient, grpcCacheClient);
+        } else {
+          cacheClient = grpcCacheClient;
+        }
         uploader.release();
         Context requestContext =
             TracingMetadataUtils.contextWithMetadata(buildRequestId, invocationId, "bes-upload");
