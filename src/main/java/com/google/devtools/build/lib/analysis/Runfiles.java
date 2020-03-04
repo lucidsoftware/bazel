@@ -410,15 +410,16 @@ public final class Runfiles implements RunfilesApi {
       Artifact symlink = entry.getValue();
       // drop nested entries; warn if this changes anything
       int n = source.segmentCount();
+      ImmutableList<String> segments = source.getSegments();
       for (int j = 1; j < n; ++j) {
-        PathFragment prefix = source.subFragment(0, n - j);
+        PathFragment prefix = PathFragment.createFromSegments(segments, 0, n - j);
         Artifact ancestor = workingManifest.get(prefix);
         if (ancestor != null) {
           // This is an obscuring symlink, so just drop it and move on if there's no reporter.
           if (eventHandler == null) {
             continue outer;
           }
-          PathFragment suffix = source.subFragment(n - j, n);
+          PathFragment suffix = PathFragment.createFromSegments(segments, n - j, n);
           PathFragment viaAncestor = ancestor.getExecPath().getRelative(suffix);
           PathFragment expected = symlink.getExecPath();
           if (!viaAncestor.equals(expected)) {

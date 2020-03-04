@@ -102,6 +102,17 @@ public final class PathFragment
     return new PathFragment(normalizedPath, driveStrLength);
   }
 
+  public static PathFragment createFromSegments(ImmutableList<String> normalizedSegments, int startIndex, int endIndex) {
+    StringBuilder builder = new StringBuilder();
+    for (int i = startIndex; i < endIndex; ++i) {
+      builder.append(normalizedSegments.get(i));
+      if (i + 1 < endIndex) {
+        builder.append(SEPARATOR_CHAR);
+      }
+    }
+    return PathFragment.createAlreadyNormalized(builder.toString());
+  }
+
   /** This method expects path to already be normalized. */
   private PathFragment(String normalizedPath, int driveStrLength) {
     this.normalizedPath = Preconditions.checkNotNull(normalizedPath);
