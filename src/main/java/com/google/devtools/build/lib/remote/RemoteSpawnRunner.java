@@ -44,9 +44,12 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandLines.ParamFileActionInput;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
+import com.google.devtools.build.lib.actions.MetadataProvider;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnMetrics;
 import com.google.devtools.build.lib.actions.SpawnResult;
@@ -55,6 +58,7 @@ import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
 import com.google.devtools.build.lib.analysis.platform.PlatformUtils;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.Reporter;
@@ -75,6 +79,7 @@ import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
 import com.google.devtools.build.lib.remote.util.Utils;
 import com.google.devtools.build.lib.remote.util.Utils.InMemoryOutput;
 import com.google.devtools.build.lib.util.ExitCode;
+import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -96,13 +101,16 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /** A client for the remote execution service. */
@@ -210,8 +218,16 @@ public class RemoteSpawnRunner implements SpawnRunner {
     context.report(ProgressStatus.EXECUTING, getName());
     RemoteOutputsMode remoteOutputsMode = remoteOptions.remoteOutputsMode;
     SortedMap<PathFragment, ActionInput> inputMap = context.getInputMapping(true);
+    ToolSignature toolSignature = remoteOptions.markToolInputs
+        ? toolInputsAsFragmentSet(spawn.getToolFiles(), context.getArtifactExpander(), context.getMetadataProvider())
+        : null;
     final MerkleTree merkleTree =
-        MerkleTree.build(inputMap, context.getMetadataProvider(), execRoot, digestUtil);
+        MerkleTree.build(
+            inputMap,
+            toolSignature == null ? ImmutableSet.of() : toolSignature.toolInputs,
+            context.getMetadataProvider(),
+            execRoot,
+            digestUtil);
     SpawnMetrics.Builder spawnMetrics =
         new SpawnMetrics.Builder()
             .setInputBytes(merkleTree.getInputBytes())
@@ -220,6 +236,11 @@ public class RemoteSpawnRunner implements SpawnRunner {
 
     // Get the remote platform properties.
     Platform platform = PlatformUtils.getPlatformProto(spawn, remoteOptions);
+    if (toolSignature != null) {
+      platform = Platform.newBuilder(platform)
+          .addProperties(Platform.Property.newBuilder().setName("persistentWorkerKey").setValue(toolSignature.key))
+          .build();
+    }
 
     Command command =
         buildCommand(
@@ -415,6 +436,27 @@ public class RemoteSpawnRunner implements SpawnRunner {
               executionMetadata.getOutputUploadCompletedTimestamp());
       spawnMetrics.setProcessOutputsTime(remoteProcessOutputsTime);
     }
+  }
+
+  @Nullable
+  private ToolSignature toolInputsAsFragmentSet(
+      NestedSet<? extends ActionInput> toolInputs,
+      Artifact.ArtifactExpander artifactExpander,
+      MetadataProvider metadataProvider)
+          throws IOException {
+    if (toolInputs.isEmpty()) {
+      return null;
+    }
+    List<ActionInput> toolInputsList = ActionInputHelper.expandArtifacts(toolInputs, artifactExpander);
+    Fingerprint fingerprint = new Fingerprint();
+    for (ActionInput input : ActionInputHelper.expandArtifacts(toolInputs, artifactExpander)) {
+      fingerprint.addPath(input.getExecPath());
+      FileArtifactValue md = metadataProvider.getMetadata(input);
+      fingerprint.addBytes(md.getDigest());
+    }
+    return new ToolSignature(
+        fingerprint.hexDigestAndReset(),
+        toolInputsList.stream().map((input) -> input.getExecPath()).collect(Collectors.toSet()));
   }
 
   private SpawnResult downloadAndFinalizeSpawnResult(
@@ -774,5 +816,15 @@ public class RemoteSpawnRunner implements SpawnRunner {
         RemoteSpawnRunner::retriableExecErrors,
         retryService,
         Retrier.ALLOW_ALL_CALLS);
+  }
+
+  private static final class ToolSignature {
+    private final String key;
+    private final Set<PathFragment> toolInputs;
+
+    private ToolSignature(String key, Set<PathFragment> toolInputs) {
+      this.key = key;
+      this.toolInputs = toolInputs;
+    }
   }
 }
