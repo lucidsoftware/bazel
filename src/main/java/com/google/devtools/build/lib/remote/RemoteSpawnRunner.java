@@ -218,7 +218,7 @@ public class RemoteSpawnRunner implements SpawnRunner {
     context.report(ProgressStatus.EXECUTING, getName());
     RemoteOutputsMode remoteOutputsMode = remoteOptions.remoteOutputsMode;
     SortedMap<PathFragment, ActionInput> inputMap = context.getInputMapping(true);
-    ToolSignature toolSignature = remoteOptions.markToolInputs
+    ToolSignature toolSignature = remoteOptions.markToolInputs && Spawns.supportsWorkers(spawn)
         ? toolInputsAsFragmentSet(spawn.getToolFiles(), context.getArtifactExpander(), context.getMetadataProvider())
         : null;
     final MerkleTree merkleTree =
