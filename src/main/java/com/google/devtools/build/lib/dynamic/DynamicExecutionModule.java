@@ -253,6 +253,8 @@ public class DynamicExecutionModule extends BlazeModule {
       }
       logger.atInfo().log("Ignoring dynamic local branch killed by signal %d", signal);
       return true;
+    } else if (isLocal) {
+      logger.atInfo().log("Not ignoring dynamic local branch killed by signal %d", signal);
     }
     return false;
   }
