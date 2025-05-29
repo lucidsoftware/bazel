@@ -1,12 +1,15 @@
 import com.google.common.annotations.VisibleForTesting;
+import com.google.devtools.build.execlog.DifferOptions;
 import com.google.devtools.build.lib.exec.Protos.SpawnExec;
 import com.google.devtools.build.lib.exec.SpawnLogReconstructor;
 import com.google.devtools.build.lib.util.io.MessageInputStream;
 import com.google.devtools.build.lib.util.io.MessageInputStreamWrapper.BinaryInputStreamWrapper;
 import com.google.devtools.build.lib.util.io.MessageInputStreamWrapper.JsonInputStreamWrapper;
+import com.google.devtools.common.options.OptionsParser;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.IOException;
+import java.util.List;
 
 public final class ExecLogDiffer {
   private ExecLogDiffer() {}
@@ -37,14 +40,38 @@ public final class ExecLogDiffer {
       // second byte would indicate a field with number 1 and wire type I32, which doesn't match
       // the proto definition).
       return new JsonInputStreamWrapper<>(
-          new FileInputStream(path), SpawnExec.getDefaultInstance());
+        new FileInputStream(path), SpawnExec.getDefaultInstance());
     }
     // Otherwise assume it's a binary file.
     return new BinaryInputStreamWrapper<>(
-        new FileInputStream(path), SpawnExec.getDefaultInstance());
+      new FileInputStream(path), SpawnExec.getDefaultInstance());
   }
 
   public static void main(String[] args) throws Exception {
-  
+    // Parse command line options
+    OptionsParser op = OptionsParser.builder().optionsClasses(DifferOptions.class).build();
+    op.parseAndExitUponError(args);
+
+    // Get the options
+    DifferOptions options = op.getOptions(DifferOptions.class);
+    List<String> remainingArgs = op.getResidue();
+
+    // Check for unexpected options
+    if (!remainingArgs.isEmpty()) {
+      System.err.println("Unexpected options: " + String.join(" ", remainingArgs));
+      System.exit(1);
+    }
+
+    // Check for required options
+    if (options.logPath == null || options.logPath.size() != 2) {
+      System.err.println("Exactly two --log_path values are required for comparison.");
+      System.exit(1);
+    } 
+
+    // Get the log paths, the output path, and the allTargets flag
+    String logPath1 = options.logPath.get(0);
+    String logPath2 = options.logPath.get(1);
+    String outputPath = options.outputPath != null ? options.outputPath : null;
+    boolean allTargets = options.allTargets;
   }
 }
