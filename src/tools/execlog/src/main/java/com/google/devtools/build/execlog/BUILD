@@ -42,3 +42,14 @@ java_library(
         "//third_party:guava",
     ],
 )
+
+java_library(
+    name = "differ",
+    srcs = [
+        "DifferOptions.java",
+        "ExecLogDiffer.java",
+    ],
+    deps = [
+        "//src/main/java/com/google/devtools/common/options",
+    ]
+)
