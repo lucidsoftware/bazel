@@ -47,7 +47,7 @@ public class DifferOptions extends OptionsBase {
       help =
           "Location where to put the output of the comparison. If left empty, the output will be"
               + " directed to stdout.")
-  public List<String> outputPath;
+  public String outputPath;
 
   @Option(
         name = "all_targets",
@@ -58,4 +58,5 @@ public class DifferOptions extends OptionsBase {
         help = "If set, checks for non-determinism in all targets, including external dependencies ('@@' targets)."
             + " If not set, only checks for non-determinism for targets inside the repository ('//' targets). "
   )
+  public boolean allTargets;
 }
