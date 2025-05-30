@@ -1,6 +1,10 @@
 import com.google.common.annotations.VisibleForTesting;
 import com.google.devtools.build.execlog.DifferOptions;
 import com.google.devtools.build.lib.exec.Protos.SpawnExec;
+import com.google.devtools.build.lib.exec.Protos.EnvironmentVariable;
+import com.google.devtools.build.lib.exec.Protos.Platform;
+import com.google.devtools.build.lib.exec.Protos.File;
+import com.google.devtools.build.lib.exec.Protos.Digest;
 import com.google.devtools.build.lib.exec.SpawnLogReconstructor;
 import com.google.devtools.build.lib.util.io.MessageInputStream;
 import com.google.devtools.build.lib.util.io.MessageInputStreamWrapper.BinaryInputStreamWrapper;
@@ -10,6 +14,13 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Objects;
+import java.util.Set;
+import java.util.HashSet;
+import java.time.LocalDate;
 
 public final class ExecLogDiffer {
   private ExecLogDiffer() {}
@@ -47,6 +58,172 @@ public final class ExecLogDiffer {
       new FileInputStream(path), SpawnExec.getDefaultInstance());
   }
 
+  // Represents necessary details of a SpawnExec object
+  // Assumes immutability: attributes are set once in the constructor and not modified later
+  // Relies on precomputed hashes for comparisons
+  static class SpawnExecDetails {
+    String targetLabel; // Label of the target for which this SpawnExec was created
+    Inputs inputs; // Inputs for the SpawnExec
+    Outputs outputs; // Outputs for the SpawnExec
+    int inputHash; // Hash of the inputs
+    int outputHash; // Hash of the outputs
+
+    SpawnExecDetails(SpawnExec ex) {
+      this.targetLabel = ex.getTargetLabel();
+      this.inputs = new Inputs(ex);
+      this.outputs = new Outputs(ex);
+      this.inputHash = this.inputs.hashCode();
+      this.outputHash = this.outputs.hashCode();
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(inputs, outputs);
+    }
+
+    static class Inputs {
+      List<String> commandArgs; // List of command line arguments for action
+      List<EnvironmentVariable> environmentVariables; // List of input directory paths
+      Platform platform; // Platform information
+      List<File> files; // List of file details
+
+      Inputs(SpawnExec ex) {
+        this.commandArgs = ex.getCommandArgsList();
+        this.environmentVariables = ex.getEnvironmentVariablesList();
+        this.platform = ex.getPlatform();
+        this.files = ex.getInputsList();
+      }
+
+      @Override
+      public int hashCode() {
+        return Objects.hash(commandArgs, environmentVariables, platform, files);
+      }
+    }
+
+    static class Outputs {
+      List<File> files; // List of output file details
+    
+      Outputs(SpawnExec ex) {
+        this.files = ex.getActualOutputsList();
+      }
+
+      @Override
+      public int hashCode() {
+        return Objects.hash(files);
+      }
+    }
+  }
+
+  // Represents the final output report
+  static class OutputReport {
+    String timestamp; // Timestamp of the report generation
+    String log1Path; // Path to the first log file
+    String log2Path; // Path to the second log file
+    Map<String, NonDeterministicTarget> nonDeterministicTargets; // Map of non-deterministic targets
+
+    OutputReport(String timestamp, String log1Path, String log2Path) {
+      this.timestamp = timestamp;
+      this.log1Path = log1Path;
+      this.log2Path = log2Path;
+      this.nonDeterministicTargets = new HashMap<>();
+    }
+
+    public void addNonDeterministicTarget(String targetLabel, NonDeterministicTarget target) {
+      if (target != null && targetLabel != null) {
+        this.nonDeterministicTargets.put(targetLabel, target);
+      }
+    }
+  }
+
+  static class NonDeterministicTarget {
+    String targetLabel; // Label of the non-deterministic target
+    List<MismatchedAction> mismatchedActions; // List of mismatched actions
+
+    NonDeterministicTarget(String targetLabel) {
+      this.targetLabel = targetLabel != null ? targetLabel : "";
+      this.mismatchedActions = new ArrayList<>();
+    }
+
+    public void addMismatchedAction(MismatchedAction action) {
+      if (action != null) {
+        this.mismatchedActions.add(action);
+      }
+    }
+  }
+
+  static class MismatchedAction {
+    String type; // "OUTPUT" or "INPUT"
+    SpawnExecDetails details1; // Details from the first log
+    SpawnExecDetails details2; // Details from the second log
+    List<Diff> diffs; // List of differences between the two details
+
+    MismatchedAction(String type, SpawnExecDetails details1, SpawnExecDetails details2) {
+      this.type = type;
+      this.details1 = details1;
+      this.details2 = details2;
+      this.diffs = computeDiffs(details1, details2);
+    }
+
+    MismatchedAction() {}
+
+    static class Diff {
+      String type; // e.g., "FILE_HASH", "FILE_PATH", "MISSING_FILE"
+      String log1Value; // Value from the first log
+      String log2Value; // Value from the second log
+
+      Diff(String type, String log1Value, String log2Value) {
+        this.type = type;
+        this.log1Value = log1Value;
+        this.log2Value = log2Value;
+      }
+
+      Diff() {}
+    }
+
+    public List<Diff> computeDiffs(SpawnExecDetails details1, SpawnExecDetails details2) {
+      List<Diff> diffs = new ArrayList<>();
+      if (type == "OUTPUT") {
+        // Compare files in outputs
+        Set<String> outputPaths1 = new HashSet<>();
+        for (File file : details1.outputs.files) {
+          outputPaths1.add(file.getPath());
+        }
+        
+        Set<String> outputPaths2 = new HashSet<>();
+        for (File file : details2.outputs.files) {
+          outputPaths2.add(file.getPath());
+        }
+
+        // Find missing files in details1
+        for (String path : outputPaths1) {
+          if (!outputPaths2.contains(path)) {
+            diffs.add(new Diff("MISSING_FILE", path, null));
+          }
+        }
+
+        // Find missing files in details2
+        for (String path : outputPaths2) {
+          if (!outputPaths1.contains(path)) {
+            diffs.add(new Diff("MISSING_FILE", null, path));
+          }
+        }
+
+        // Compare hashes for common files
+        for (File file1 : details1.outputs.files) {
+          for (File file2 : details2.outputs.files) {
+            if (file1.getPath().equals(file2.getPath())) {
+              if (!file1.getDigest().getHash().equals(file2.getDigest().getHash())) {
+                diffs.add(new Diff("FILE_HASH", file1.getDigest().getHash(), file2.getDigest().getHash()));
+              }
+            }
+          }
+        }
+      }
+
+      return diffs;
+    }
+  }
+
   public static void main(String[] args) throws Exception {
     // Parse command line options
     OptionsParser op = OptionsParser.builder().optionsClasses(DifferOptions.class).build();
@@ -73,5 +250,10 @@ public final class ExecLogDiffer {
     String logPath2 = options.logPath.get(1);
     String outputPath = options.outputPath != null ? options.outputPath : null;
     boolean allTargets = options.allTargets;
+
+    // Initialize data structures for the target actions and output
+    Map<String, Map<String, String>> targetActionsMap = new HashMap<>();
+    Map<String, Map<String, SpawnExecDetails>> mismatchedActionsMap = new HashMap<>();
+    OutputReport report = new OutputReport(LocalDate.now().toString(), logPath1, logPath2);
   }
 }
