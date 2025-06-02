@@ -321,5 +321,25 @@ public final class ExecLogDiffer {
         }
       }
     }
+
+    // Third pass: Reread the first log to get details for mismatched actions
+    try (MessageInputStream<SpawnExec> input1 = getMessageInputStream(logPath1)) {
+      SpawnExec ex1;
+      while ((ex1 = input1.read()) != null) {
+        SpawnExecDetails details = new SpawnExecDetails(ex1);
+        String targetLabel = details.targetLabel;
+        int inputHash = details.inputHash;
+    
+        if (report.nonDeterministicTargets.containsKey(targetLabel)) {
+          NonDeterministicTarget nonDetTarget = report.nonDeterministicTargets.get(targetLabel);
+    
+          // Use a stream to find the matching MismatchedAction
+          nonDetTarget.mismatchedActions.stream()
+              .filter(action -> action.details2 != null && action.details2.inputHash == inputHash)
+              .findFirst()
+              .ifPresent(action -> action.addDetails(details));
+        }
+      }
+    }
   }
 }
