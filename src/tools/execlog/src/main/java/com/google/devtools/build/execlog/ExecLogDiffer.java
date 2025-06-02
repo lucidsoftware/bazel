@@ -176,11 +176,13 @@ public final class ExecLogDiffer {
 
     static class Diff {
       String type; // e.g., "FILE_HASH", "FILE_PATH", "MISSING_FILE"
+      String path; // Path of the file if applicable
       String log1Value; // Value from the first log
       String log2Value; // Value from the second log
 
-      Diff(String type, String log1Value, String log2Value) {
+      Diff(String type, String log1Value, String log2Value, String path) {
         this.type = type;
+        this.path = path != null ? path : "";
         this.log1Value = log1Value;
         this.log2Value = log2Value;
       }
@@ -218,14 +220,14 @@ public final class ExecLogDiffer {
             // Find missing files in details
             for (String path : outputPaths1) {
                 if (!outputPaths2.contains(path)) {
-                    diffs.add(new Diff("MISSING_FILE", path, null));
+                    diffs.add(new Diff("MISSING_FILE", null, null, path));
                 }
             }
 
             // Find missing files in details2
             for (String path : outputPaths2) {
                 if (!outputPaths1.contains(path)) {
-                    diffs.add(new Diff("MISSING_FILE", null, path));
+                    diffs.add(new Diff("MISSING_FILE", null, null, path));
                 }
             }
 
@@ -234,7 +236,7 @@ public final class ExecLogDiffer {
                 for (File file2 : details2.outputs.files) {
                     if (file1.getPath().equals(file2.getPath())) {
                         if (!file1.getDigest().getHash().equals(file2.getDigest().getHash())) {
-                            diffs.add(new Diff("FILE_HASH", file1.getDigest().getHash(), file2.getDigest().getHash()));
+                            diffs.add(new Diff("FILE_HASH", file1.getDigest().getHash(), file2.getDigest().getHash(), file1.getPath()));
                         }
                     }
                 }
