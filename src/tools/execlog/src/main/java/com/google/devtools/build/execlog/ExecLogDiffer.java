@@ -292,6 +292,11 @@ public final class ExecLogDiffer {
         int inputHash = details.inputHash;
         int outputHash = details.outputHash;
 
+        if (!allTargets && targetLabel.startsWith("@@")) {
+          // Skip external dependencies if allTargets is false
+          continue;
+        }
+
         // Add the action to the target actions map for that target label
         targetActionsMap
             .computeIfAbsent(targetLabel, k -> new HashMap<>())
@@ -307,6 +312,11 @@ public final class ExecLogDiffer {
         String targetLabel = details2.targetLabel;
         int inputHash2 = details2.inputHash;
         int outputHash2 = details2.outputHash;
+
+        if (!allTargets && targetLabel.startsWith("@@")) {
+          // Skip external dependencies if allTargets is false
+          continue;
+        }
   
         if (targetActionsMap.containsKey(targetLabel)) {
           // Check if the input hash from the second log matches any input hash in the first log for that target
@@ -335,6 +345,11 @@ public final class ExecLogDiffer {
         SpawnExecDetails details = new SpawnExecDetails(ex1);
         String targetLabel = details.targetLabel;
         int inputHash = details.inputHash;
+
+        if (!allTargets && targetLabel.startsWith("@@")) {
+          // Skip external dependencies if allTargets is false
+          continue;
+        }
     
         if (report.nonDeterministicTargets.containsKey(targetLabel)) {
           NonDeterministicTarget nonDetTarget = report.nonDeterministicTargets.get(targetLabel);
