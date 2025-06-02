@@ -1,5 +1,7 @@
 package com.google.devtools.build.execlog;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.devtools.build.execlog.DifferOptions;
 import com.google.devtools.build.lib.exec.Protos.SpawnExec;
@@ -15,6 +17,10 @@ import com.google.devtools.common.options.OptionsParser;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.IOException;
+import java.io.FileWriter;
+import java.io.BufferedWriter;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -339,6 +345,38 @@ public final class ExecLogDiffer {
               .findFirst()
               .ifPresent(action -> action.addDetails(details));
         }
+      }
+    }
+
+    // Write the report as JSONL to the specified output path or stdout
+    Gson gson = new Gson();
+
+    // Determine output destination
+    if (outputPath != null) {
+      // Write to a file
+      try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputPath, StandardCharsets.UTF_8))) {
+        for (NonDeterministicTarget target : report.nonDeterministicTargets.values()) {
+          // Serialize the NonDeterministicTarget object to a JSON string
+          String jsonLine = gson.toJson(target);
+          // Write the JSON string followed by a newline character
+          writer.write(jsonLine);
+          writer.newLine(); // Writes a system-dependent new line character
+        }
+      } catch (IOException e) {
+        System.err.println("Error writing report to file: " + e.getMessage());
+        System.exit(1);
+      }
+    } else {
+      // Write to standard output (console)
+      try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(System.out, StandardCharsets.UTF_8))) {
+        for (NonDeterministicTarget target : report.nonDeterministicTargets.values()) {
+          String jsonLine = gson.toJson(target);
+          writer.write(jsonLine);
+          writer.newLine();
+        }
+      } catch (IOException e) {
+        System.err.println("Error writing report to stdout: " + e.getMessage());
+        System.exit(1);
       }
     }
   }
