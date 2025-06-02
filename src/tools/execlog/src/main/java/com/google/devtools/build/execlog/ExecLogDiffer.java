@@ -1,3 +1,5 @@
+package com.google.devtools.build.execlog;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.devtools.build.execlog.DifferOptions;
 import com.google.devtools.build.lib.exec.Protos.SpawnExec;
@@ -152,16 +154,16 @@ public final class ExecLogDiffer {
   }
 
   static class MismatchedAction {
-    String type; // "OUTPUT" or "INPUT"
+    String type; // "OUTPUT", "INPUT", or "TARGET_NOT_FOUND"
     SpawnExecDetails details; // Details from the first log
     SpawnExecDetails details2; // Details from the second log
     List<Diff> diffs; // List of differences between the two details
 
-    MismatchedAction(String type, SpawnExecDetails details, SpawnExecDetails details2) {
+    MismatchedAction(String type, SpawnExecDetails details2) {
       this.type = type;
-      this.details = details;
+      this.details = null;
       this.details2 = details2;
-      this.diffs = computeDiffs(details, details2);
+      this.diffs = new ArrayList<>();
     }
 
     MismatchedAction() {}
@@ -180,48 +182,67 @@ public final class ExecLogDiffer {
       Diff() {}
     }
 
-    public List<Diff> computeDiffs(SpawnExecDetails details, SpawnExecDetails details2) {
-      List<Diff> diffs = new ArrayList<>();
-      if (type == "OUTPUT") {
-        // Compare files in outputs
-        Set<String> outputPaths1 = new HashSet<>();
-        for (File file : details.outputs.files) {
-          outputPaths1.add(file.getPath());
+    public void addDetails(SpawnExecDetails details) {
+        if (details != null) {
+            this.details = details;
+            computeAndSetDiffs();
         }
-        
-        Set<String> outputPaths2 = new HashSet<>();
-        for (File file : details2.outputs.files) {
-          outputPaths2.add(file.getPath());
-        }
-
-        // Find missing files in details
-        for (String path : outputPaths1) {
-          if (!outputPaths2.contains(path)) {
-            diffs.add(new Diff("MISSING_FILE", path, null));
-          }
-        }
-
-        // Find missing files in details2
-        for (String path : outputPaths2) {
-          if (!outputPaths1.contains(path)) {
-            diffs.add(new Diff("MISSING_FILE", null, path));
-          }
-        }
-
-        // Compare hashes for common files
-        for (File file1 : details.outputs.files) {
-          for (File file2 : details2.outputs.files) {
-            if (file1.getPath().equals(file2.getPath())) {
-              if (!file1.getDigest().getHash().equals(file2.getDigest().getHash())) {
-                diffs.add(new Diff("FILE_HASH", file1.getDigest().getHash(), file2.getDigest().getHash()));
-              }
-            }
-          }
-        }
-      }
-
-      return diffs;
     }
+
+    // Computes and sets the diffs for this mismatched action
+    private void computeAndSetDiffs() {
+        this.diffs = computeDiffs();
+    }
+
+    // Computes diffs between the two SpawnExecDetails
+    private List<Diff> computeDiffs() {
+        List<Diff> diffs = new ArrayList<>();
+        if (type.equals("OUTPUT") && details != null && details2 != null) {
+            // Compare files in outputs
+            Set<String> outputPaths1 = new HashSet<>();
+            for (File file : details.outputs.files) {
+                outputPaths1.add(file.getPath());
+            }
+
+            Set<String> outputPaths2 = new HashSet<>();
+            for (File file : details2.outputs.files) {
+                outputPaths2.add(file.getPath());
+            }
+
+            // Find missing files in details
+            for (String path : outputPaths1) {
+                if (!outputPaths2.contains(path)) {
+                    diffs.add(new Diff("MISSING_FILE", path, null));
+                }
+            }
+
+            // Find missing files in details2
+            for (String path : outputPaths2) {
+                if (!outputPaths1.contains(path)) {
+                    diffs.add(new Diff("MISSING_FILE", null, path));
+                }
+            }
+
+            // Compare hashes for common files
+            for (File file1 : details.outputs.files) {
+                for (File file2 : details2.outputs.files) {
+                    if (file1.getPath().equals(file2.getPath())) {
+                        if (!file1.getDigest().getHash().equals(file2.getDigest().getHash())) {
+                            diffs.add(new Diff("FILE_HASH", file1.getDigest().getHash(), file2.getDigest().getHash()));
+                        }
+                    }
+                }
+            }
+        }
+        return diffs;
+    }
+  }
+
+  private static void addMismatchedAction(OutputReport report, String targetLabel, String actionType, SpawnExecDetails details2) {
+    NonDeterministicTarget nonDetTarget = report.nonDeterministicTargets
+        .computeIfAbsent(targetLabel, k -> new NonDeterministicTarget(targetLabel));
+    MismatchedAction action = new MismatchedAction(actionType, details2);
+    nonDetTarget.addMismatchedAction(action);
   }
 
   public static void main(String[] args) throws Exception {
@@ -252,7 +273,7 @@ public final class ExecLogDiffer {
     boolean allTargets = options.allTargets;
 
     // Initialize data structures for the target actions and output
-    Map<String, Map<String, String>> targetActionsMap = new HashMap<>();
+    Map<String, Map<Integer, Integer>> targetActionsMap = new HashMap<>();
     Map<String, Map<String, SpawnExecDetails>> mismatchedActionsMap = new HashMap<>();
     OutputReport report = new OutputReport(LocalDate.now().toString(), logPath1, logPath2);
 
@@ -268,7 +289,36 @@ public final class ExecLogDiffer {
         // Add the action to the target actions map for that target label
         targetActionsMap
             .computeIfAbsent(targetLabel, k -> new HashMap<>())
-            .put(String.valueOf(inputHash), String.valueOf(outputHash));
+            .put(inputHash, outputHash);
+      }
+    }
+
+    // Second pass: Read the second log and compare with target actions from the first log
+    try (MessageInputStream<SpawnExec> input2 = getMessageInputStream(logPath2)) {
+      SpawnExec ex2;
+      while ((ex2 = input2.read()) != null) {
+        SpawnExecDetails details2 = new SpawnExecDetails(ex2);
+        String targetLabel = details2.targetLabel;
+        int inputHash2 = details2.inputHash;
+        int outputHash2 = details2.outputHash;
+  
+        if (targetActionsMap.containsKey(targetLabel)) {
+          // Check if the input hash from the second log matches any input hash in the first log for that target
+          Map<Integer, Integer> actions = targetActionsMap.get(targetLabel);
+          if (actions.containsKey(inputHash2)) {
+            int outputHash1 = actions.get(inputHash2);
+            if (outputHash1 != outputHash2) {
+              // Mismatch found in outputs
+              addMismatchedAction(report, targetLabel, "OUTPUT", details2);
+            }
+          } else {
+            // Input hash from the second log does not exist in the first log for this target
+            addMismatchedAction(report, targetLabel, "INPUT", details2);
+          }
+        } else {
+          // Target label not found in the first log
+          addMismatchedAction(report, targetLabel, "TARGET_NOT_FOUND", details2);
+        }
       }
     }
   }
