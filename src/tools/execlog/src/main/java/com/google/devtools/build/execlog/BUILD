@@ -55,5 +55,6 @@ java_library(
         "//src/main/java/com/google/devtools/common/options",
         "//src/main/protobuf:spawn_java_proto",
         "//third_party:guava",
+        "@maven//:com_google_code_gson_gson"
     ]
 )
