@@ -183,6 +183,7 @@ public final class ExecLogDiffer {
     }
 
     // Computes diffs between the two SpawnExecDetails
+    // This is only done for OUTPUT mismatches as they are easier to identify and fix
     private List<Diff> computeDiffs() {
         List<Diff> diffs = new ArrayList<>();
         if (mismatchType == MismatchType.OUTPUT && details != null && details2 != null) {
