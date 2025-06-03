@@ -127,14 +127,26 @@ public final class ExecLogDiffer {
     }
   }
 
+  enum MismatchType {
+    OUTPUT, // Mismatch in output files
+    INPUT, // Mismatch in input files
+    TARGET_NOT_FOUND // Target not found in the first log
+  }
+
+  enum DiffType {
+    FILE_HASH, // Mismatch in file hashes
+    FILE_PATH, // Mismatch in file paths
+    MISSING_FILE // File is missing in one of the logs
+  }
+
   static class MismatchedAction {
-    String type; // "OUTPUT", "INPUT", or "TARGET_NOT_FOUND"
+    MismatchType mismatchType; // "OUTPUT", "INPUT", or "TARGET_NOT_FOUND"
     SpawnExecDetails details; // Details from the first log
     SpawnExecDetails details2; // Details from the second log
     List<Diff> diffs; // List of differences between the two details
 
-    MismatchedAction(String type, SpawnExecDetails details2) {
-      this.type = type;
+    MismatchedAction(MismatchType type, SpawnExecDetails details2) {
+      this.mismatchType = type;
       this.details = null;
       this.details2 = details2;
       this.diffs = new ArrayList<>();
@@ -143,13 +155,13 @@ public final class ExecLogDiffer {
     MismatchedAction() {}
 
     static class Diff {
-      String type; // e.g., "FILE_HASH", "FILE_PATH", "MISSING_FILE"
+      DiffType diffType; // e.g., "FILE_HASH", "FILE_PATH", "MISSING_FILE"
       String path; // Path of the file if applicable
       String log1Value; // Value from the first log
       String log2Value; // Value from the second log
 
-      Diff(String type, String log1Value, String log2Value, String path) {
-        this.type = type;
+      Diff(DiffType type, String log1Value, String log2Value, String path) {
+        this.diffType = type;
         this.path = path != null ? path : "";
         this.log1Value = log1Value;
         this.log2Value = log2Value;
@@ -173,7 +185,7 @@ public final class ExecLogDiffer {
     // Computes diffs between the two SpawnExecDetails
     private List<Diff> computeDiffs() {
         List<Diff> diffs = new ArrayList<>();
-        if (type.equals("OUTPUT") && details != null && details2 != null) {
+        if (mismatchType == MismatchType.OUTPUT && details != null && details2 != null) {
             // Compare files in outputs
             Set<String> outputPaths1 = new HashSet<>();
             for (File file : details.outputs.files) {
@@ -188,14 +200,14 @@ public final class ExecLogDiffer {
             // Find missing files in details
             for (String path : outputPaths1) {
                 if (!outputPaths2.contains(path)) {
-                    diffs.add(new Diff("MISSING_FILE", null, null, path));
+                    diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
                 }
             }
 
             // Find missing files in details2
             for (String path : outputPaths2) {
                 if (!outputPaths1.contains(path)) {
-                    diffs.add(new Diff("MISSING_FILE", null, null, path));
+                    diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
                 }
             }
 
@@ -204,7 +216,7 @@ public final class ExecLogDiffer {
                 for (File file2 : details2.outputs.files) {
                     if (file1.getPath().equals(file2.getPath())) {
                         if (!file1.getDigest().getHash().equals(file2.getDigest().getHash())) {
-                            diffs.add(new Diff("FILE_HASH", file1.getDigest().getHash(), file2.getDigest().getHash(), file1.getPath()));
+                            diffs.add(new Diff(DiffType.FILE_HASH, file1.getDigest().getHash(), file2.getDigest().getHash(), file1.getPath()));
                         }
                     }
                 }
@@ -214,7 +226,7 @@ public final class ExecLogDiffer {
     }
   }
 
-  private static void addMismatchedAction(OutputReport report, String targetLabel, String actionType, SpawnExecDetails details2) {
+  private static void addMismatchedAction(OutputReport report, String targetLabel, MismatchType actionType, SpawnExecDetails details2) {
     NonDeterministicTarget nonDetTarget = report.nonDeterministicTargets
         .computeIfAbsent(targetLabel, k -> new NonDeterministicTarget(targetLabel));
     MismatchedAction action = new MismatchedAction(actionType, details2);
@@ -295,15 +307,15 @@ public final class ExecLogDiffer {
             int outputHash1 = actions.get(inputHash2);
             if (outputHash1 != outputHash2) {
               // Mismatch found in outputs
-              addMismatchedAction(report, targetLabel, "OUTPUT", details2);
+              addMismatchedAction(report, targetLabel, MismatchType.OUTPUT, details2);
             }
           } else {
             // Input hash from the second log does not exist in the first log for this target
-            addMismatchedAction(report, targetLabel, "INPUT", details2);
+            addMismatchedAction(report, targetLabel, MismatchType.INPUT, details2);
           }
         } else {
           // Target label not found in the first log
-          addMismatchedAction(report, targetLabel, "TARGET_NOT_FOUND", details2);
+          addMismatchedAction(report, targetLabel, MismatchType.TARGET_NOT_FOUND, details2);
         }
       }
     }
