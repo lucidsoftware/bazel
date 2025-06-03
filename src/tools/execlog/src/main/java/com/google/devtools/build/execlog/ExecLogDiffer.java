@@ -38,11 +38,11 @@ public final class ExecLogDiffer {
   // Assumes immutability: attributes are set once in the constructor and not modified later
   // Relies on precomputed hashes for comparisons
   static class SpawnExecDetails {
-    String targetLabel; // Label of the target for which this SpawnExec was created
-    Inputs inputs; // Inputs for the SpawnExec
-    Outputs outputs; // Outputs for the SpawnExec
-    int inputHash; // Hash of the inputs
-    int outputHash; // Hash of the outputs
+    final String targetLabel; // Label of the target for which this SpawnExec was created
+    final Inputs inputs; // Inputs for the SpawnExec
+    final Outputs outputs; // Outputs for the SpawnExec
+    final int inputHash; // Hash of the inputs
+    final int outputHash; // Hash of the outputs
 
     SpawnExecDetails(SpawnExec ex) {
       this.targetLabel = ex.getTargetLabel();
@@ -58,10 +58,10 @@ public final class ExecLogDiffer {
     }
 
     static class Inputs {
-      List<String> commandArgs; // List of command line arguments for action
-      List<EnvironmentVariable> environmentVariables; // List of input directory paths
-      Platform platform; // Platform information
-      List<File> files; // List of file details
+      final List<String> commandArgs; // List of command line arguments for action
+      final List<EnvironmentVariable> environmentVariables; // List of input directory paths
+      final Platform platform; // Platform information
+      final List<File> files; // List of file details
 
       Inputs(SpawnExec ex) {
         this.commandArgs = ex.getCommandArgsList();
@@ -77,7 +77,7 @@ public final class ExecLogDiffer {
     }
 
     static class Outputs {
-      List<File> files; // List of output file details
+      final List<File> files; // List of output file details
     
       Outputs(SpawnExec ex) {
         this.files = ex.getActualOutputsList();
