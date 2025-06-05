@@ -185,45 +185,49 @@ public final class ExecLogDiffer {
     // Computes diffs between the two SpawnExecDetails
     // This is only done for OUTPUT mismatches as they are easier to identify and fix
     private List<Diff> computeDiffs() {
-        List<Diff> diffs = new ArrayList<>();
-        if (mismatchType == MismatchType.OUTPUT && details != null && details2 != null) {
-            // Compare files in outputs
-            Set<String> outputPaths1 = new HashSet<>();
-            for (File file : details.outputs.files) {
-                outputPaths1.add(file.getPath());
-            }
-
-            Set<String> outputPaths2 = new HashSet<>();
-            for (File file : details2.outputs.files) {
-                outputPaths2.add(file.getPath());
-            }
-
-            // Find missing files in details
-            for (String path : outputPaths1) {
-                if (!outputPaths2.contains(path)) {
-                    diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
-                }
-            }
-
-            // Find missing files in details2
-            for (String path : outputPaths2) {
-                if (!outputPaths1.contains(path)) {
-                    diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
-                }
-            }
-
-            // Compare hashes for common files
-            for (File file1 : details.outputs.files) {
-                for (File file2 : details2.outputs.files) {
-                    if (file1.getPath().equals(file2.getPath())) {
-                        if (!file1.getDigest().getHash().equals(file2.getDigest().getHash())) {
-                            diffs.add(new Diff(DiffType.FILE_HASH, file1.getDigest().getHash(), file2.getDigest().getHash(), file1.getPath()));
-                        }
-                    }
-                }
-            }
+      List<Diff> diffs = new ArrayList<>();
+      if (mismatchType == MismatchType.OUTPUT && details != null && details2 != null) {
+        // Compare files in outputs
+        Set<String> outputPaths1 = new HashSet<>();
+        for (File file : details.outputs.files) {
+          outputPaths1.add(file.getPath());
         }
-        return diffs;
+
+        Set<String> outputPaths2 = new HashSet<>();
+        for (File file : details2.outputs.files) {
+          outputPaths2.add(file.getPath());
+        }
+
+        // Find missing files in details
+        for (String path : outputPaths1) {
+          if (!outputPaths2.contains(path)) {
+            diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
+          }
+        }
+
+        // Find missing files in details2
+        for (String path : outputPaths2) {
+          if (!outputPaths1.contains(path)) {
+            diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
+          }
+        }
+
+        // Compare hashes for common files
+        Map<String, String> fileHashes1 = new HashMap<>();
+        for (File file1 : details.outputs.files) {
+          fileHashes1.put(file1.getPath(), file1.getDigest().getHash());
+        }
+        
+        for (File file2 : details2.outputs.files) {
+          String hash1 = fileHashes1.get(file2.getPath());
+          if (hash1 != null) { // File exists in both outputs
+            if (!hash1.equals(file2.getDigest().getHash())) {
+              diffs.add(new Diff(DiffType.FILE_HASH, hash1, file2.getDigest().getHash(), file2.getPath()));
+            }
+          }
+        }
+      }
+      return diffs;
     }
   }
 
