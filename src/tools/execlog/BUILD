@@ -27,3 +27,10 @@ java_binary(
     visibility = ["//visibility:public"],
     runtime_deps = ["//src/tools/execlog/src/main/java/com/google/devtools/build/execlog:converter"],
 )
+
+java_binary(
+    name = "differ",
+    main_class = "com.google.devtools.build.execlog.ExecLogDiffer",
+    visibility = ["//visibility:public"],
+    runtime_deps = ["//src/tools/execlog/src/main/java/com/google/devtools/build/execlog:differ"],
+)
