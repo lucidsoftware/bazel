@@ -127,12 +127,6 @@ public final class ExecLogDiffer {
     }
   }
 
-  enum MismatchType {
-    OUTPUT, // Mismatch in output files
-    INPUT, // Mismatch in input files
-    TARGET_NOT_FOUND // Target not found in the first log
-  }
-
   enum DiffType {
     FILE_HASH, // Mismatch in file hashes
     FILE_PATH, // Mismatch in file paths
@@ -140,13 +134,11 @@ public final class ExecLogDiffer {
   }
 
   static class MismatchedAction {
-    MismatchType mismatchType; // "OUTPUT", "INPUT", or "TARGET_NOT_FOUND"
     SpawnExecDetails details; // Details from the first log
     SpawnExecDetails details2; // Details from the second log
     List<Diff> diffs; // List of differences between the two details
 
-    MismatchedAction(MismatchType type, SpawnExecDetails details2) {
-      this.mismatchType = type;
+    MismatchedAction(SpawnExecDetails details2) {
       this.details = null;
       this.details2 = details2;
       this.diffs = new ArrayList<>();
@@ -183,47 +175,44 @@ public final class ExecLogDiffer {
     }
 
     // Computes diffs between the two SpawnExecDetails
-    // This is only done for OUTPUT mismatches as they are easier to identify and fix
     private List<Diff> computeDiffs() {
       List<Diff> diffs = new ArrayList<>();
-      if (mismatchType == MismatchType.OUTPUT && details != null && details2 != null) {
-        // Compare files in outputs
-        Set<String> outputPaths1 = new HashSet<>();
-        for (File file : details.outputs.files) {
-          outputPaths1.add(file.getPath());
-        }
+      // Compare files in outputs
+      Set<String> outputPaths1 = new HashSet<>();
+      for (File file : details.outputs.files) {
+        outputPaths1.add(file.getPath());
+      }
 
-        Set<String> outputPaths2 = new HashSet<>();
-        for (File file : details2.outputs.files) {
-          outputPaths2.add(file.getPath());
-        }
+      Set<String> outputPaths2 = new HashSet<>();
+      for (File file : details2.outputs.files) {
+        outputPaths2.add(file.getPath());
+      }
 
-        // Find missing files in details
-        for (String path : outputPaths1) {
-          if (!outputPaths2.contains(path)) {
-            diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
-          }
+      // Find missing files in details
+      for (String path : outputPaths1) {
+        if (!outputPaths2.contains(path)) {
+          diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
         }
+      }
 
-        // Find missing files in details2
-        for (String path : outputPaths2) {
-          if (!outputPaths1.contains(path)) {
-            diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
-          }
+      // Find missing files in details2
+      for (String path : outputPaths2) {
+        if (!outputPaths1.contains(path)) {
+          diffs.add(new Diff(DiffType.MISSING_FILE, null, null, path));
         }
+      }
 
-        // Compare hashes for common files
-        Map<String, String> fileHashes1 = new HashMap<>();
-        for (File file1 : details.outputs.files) {
-          fileHashes1.put(file1.getPath(), file1.getDigest().getHash());
-        }
-        
-        for (File file2 : details2.outputs.files) {
-          String hash1 = fileHashes1.get(file2.getPath());
-          if (hash1 != null) { // File exists in both outputs
-            if (!hash1.equals(file2.getDigest().getHash())) {
-              diffs.add(new Diff(DiffType.FILE_HASH, hash1, file2.getDigest().getHash(), file2.getPath()));
-            }
+      // Compare hashes for common files
+      Map<String, String> fileHashes1 = new HashMap<>();
+      for (File file1 : details.outputs.files) {
+        fileHashes1.put(file1.getPath(), file1.getDigest().getHash());
+      }
+      
+      for (File file2 : details2.outputs.files) {
+        String hash1 = fileHashes1.get(file2.getPath());
+        if (hash1 != null) { // File exists in both outputs
+          if (!hash1.equals(file2.getDigest().getHash())) {
+            diffs.add(new Diff(DiffType.FILE_HASH, hash1, file2.getDigest().getHash(), file2.getPath()));
           }
         }
       }
@@ -231,10 +220,10 @@ public final class ExecLogDiffer {
     }
   }
 
-  private static void addMismatchedAction(OutputReport report, String targetLabel, MismatchType actionType, SpawnExecDetails details2) {
+  private static void addMismatchedAction(OutputReport report, String targetLabel, SpawnExecDetails details2) {
     NonDeterministicTarget nonDetTarget = report.nonDeterministicTargets
         .computeIfAbsent(targetLabel, k -> new NonDeterministicTarget(targetLabel));
-    MismatchedAction action = new MismatchedAction(actionType, details2);
+    MismatchedAction action = new MismatchedAction(details2);
     nonDetTarget.addMismatchedAction(action);
   }
 
@@ -269,6 +258,7 @@ public final class ExecLogDiffer {
     Map<String, Map<Integer, Integer>> targetActionsMap = new HashMap<>();
     Map<String, Map<String, SpawnExecDetails>> mismatchedActionsMap = new HashMap<>();
     OutputReport report = new OutputReport(LocalDate.now().toString(), logPath1, logPath2);
+    Set<String> inputMismatches = new HashSet<>();
 
     // First pass: Read the first log and populate the target actions map
     try (MessageInputStream<SpawnExec> input1 = ExecLogParser.getMessageInputStream(logPath1)) {
@@ -312,15 +302,15 @@ public final class ExecLogDiffer {
             int outputHash1 = actions.get(inputHash2);
             if (outputHash1 != outputHash2) {
               // Mismatch found in outputs
-              addMismatchedAction(report, targetLabel, MismatchType.OUTPUT, details2);
+              addMismatchedAction(report, targetLabel, details2);
             }
           } else {
             // Input hash from the second log does not exist in the first log for this target
-            addMismatchedAction(report, targetLabel, MismatchType.INPUT, details2);
+            inputMismatches.add(targetLabel);
           }
         } else {
           // Target label not found in the first log
-          addMismatchedAction(report, targetLabel, MismatchType.TARGET_NOT_FOUND, details2);
+          inputMismatches.add(targetLabel);
         }
       }
     }
@@ -353,16 +343,23 @@ public final class ExecLogDiffer {
     // Write the report as JSONL to the specified output path or stdout
     Gson gson = new Gson();
 
+    // Serialize the inputMismatches set to JSON
+    String inputMismatchesJson = gson.toJson(inputMismatches);
+
     // Determine output destination
     if (outputPath != null) {
       // Write to a file
       try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputPath, StandardCharsets.UTF_8))) {
+        // Write inputMismatches as the first JSON object
+        writer.write(inputMismatchesJson);
+        writer.newLine(); // Writes a system-dependent new line character
+
         for (NonDeterministicTarget target : report.nonDeterministicTargets.values()) {
           // Serialize the NonDeterministicTarget object to a JSON string
           String jsonLine = gson.toJson(target);
           // Write the JSON string followed by a newline character
           writer.write(jsonLine);
-          writer.newLine(); // Writes a system-dependent new line character
+          writer.newLine();
         }
       } catch (IOException e) {
         System.err.println("Error writing report to file: " + e.getMessage());
@@ -371,6 +368,10 @@ public final class ExecLogDiffer {
     } else {
       // Write to standard output (console)
       try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(System.out, StandardCharsets.UTF_8))) {
+        // Write inputMismatches as the first JSON object
+        writer.write(inputMismatchesJson);
+        writer.newLine();
+
         for (NonDeterministicTarget target : report.nonDeterministicTargets.values()) {
           String jsonLine = gson.toJson(target);
           writer.write(jsonLine);
