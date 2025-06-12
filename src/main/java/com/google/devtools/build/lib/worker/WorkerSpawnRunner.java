@@ -90,6 +90,14 @@ final class WorkerSpawnRunner implements SpawnRunner {
    */
   private static final int VERBOSE_LEVEL = 10;
 
+  /**
+   * The next work request ID to use. This field is static so we don't reuse work request IDs across
+   * Bazel invocations. Although that shouldn't happen under normal circumstances because we wait
+   * until a request finishes before exiting, it can happen if dynamic execution is enabled and one
+   * branch beats the other in the race.
+   */
+  private static final AtomicInteger requestIdCounter = new AtomicInteger(1);
+
   private final SandboxHelpers helpers;
   private final Path execRoot;
   private final ExtendedEventHandler reporter;
@@ -97,7 +105,6 @@ final class WorkerSpawnRunner implements SpawnRunner {
   private final RunfilesTreeUpdater runfilesTreeUpdater;
   private final WorkerOptions workerOptions;
   private final WorkerParser workerParser;
-  private final AtomicInteger requestIdCounter = new AtomicInteger(1);
   private final WorkerProcessMetricsCollector metricsCollector;
 
   public WorkerSpawnRunner(
