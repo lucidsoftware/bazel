@@ -357,7 +357,9 @@ public class WorkerMultiplexer {
       throw new IOException(
           "Attempting to send request " + request.getRequestId() + " to dead process");
     }
-    responseChecker.put(request.getRequestId(), new Semaphore(0));
+    if (!request.getCancel()) {
+      responseChecker.put(request.getRequestId(), new Semaphore(0));
+    }
     pendingRequests.add(request);
   }
 
@@ -367,25 +369,31 @@ public class WorkerMultiplexer {
    * execution.
    */
   public WorkResponse getResponse(Integer requestId) throws InterruptedException, IOException {
+    if (!process.isAlive()) {
+      // If the process has died, all we can do is return what may already have been returned.
+      return workerProcessResponse.get(requestId);
+    }
+
+    Semaphore waitForResponse = responseChecker.get(requestId);
+
+    if (waitForResponse == null) {
+      report("Null response semaphore for " + requestId);
+      // If there is no semaphore for this request, it probably failed to send, so we just return
+      // what we got, probably nothing.
+      return workerProcessResponse.get(requestId);
+    }
+
     try {
-      if (!process.isAlive()) {
-        // If the process has died, all we can do is return what may already have been returned.
-        return workerProcessResponse.get(requestId);
-      }
-
-      Semaphore waitForResponse = responseChecker.get(requestId);
-
-      if (waitForResponse == null) {
-        report("Null response semaphore for " + requestId);
-        // If there is no semaphore for this request, it probably failed to send, so we just return
-        // what we got, probably nothing.
-        return workerProcessResponse.get(requestId);
-      }
-
-      // Wait for the multiplexer to get our response and release this semaphore. If the multiplexer
-      // process dies, the semaphore gets released with no response available.
+      // Wait for the multiplexer to get our response and release this semaphore.
       waitForResponse.acquire();
+    } catch (InterruptedException e) {
+      // When this thread is interrupted, it's usually because dynamic execution found a faster
+      // remote branch. A reaper thread will be spawned to wait for the response instead, so we
+      // leave the semaphore in responseChecker for it to use.
+      throw e;
+    }
 
+    try {
       if (workerProcessResponse.get(requestId) == null && !process.isAlive()) {
         throw new IOException("Worker process for " + workerKey.getMnemonic() + " has died");
       }
