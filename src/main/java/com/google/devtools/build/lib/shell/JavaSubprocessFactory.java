@@ -14,7 +14,9 @@
 
 package com.google.devtools.build.lib.shell;
 
+import com.google.common.base.Throwables;
 import com.google.common.collect.Lists;
+import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.shell.SubprocessBuilder.StreamAction;
 import com.google.devtools.build.lib.util.StringEncoding;
 import java.io.File;
@@ -22,6 +24,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.ProcessBuilder.Redirect;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -114,6 +120,17 @@ public class JavaSubprocessFactory implements SubprocessFactory {
 
   public static final JavaSubprocessFactory INSTANCE = new JavaSubprocessFactory();
 
+  // Subprocesses fork from this platform thread to ensure the subprocess's parent is long lived,
+  // which prevents actions from being killed erroneously. See the doc comment on
+  // {@link startOnPlatformThread} for more details.
+  private static final ExecutorService forkExecutor =
+      Executors.newSingleThreadExecutor(
+          r -> {
+            Thread t = new Thread(r, "subprocess-fork");
+            t.setDaemon(true);
+            return t;
+          });
+
   private JavaSubprocessFactory() {
     // We are a singleton
   }
@@ -138,7 +155,7 @@ public class JavaSubprocessFactory implements SubprocessFactory {
   // As a workaround, we put a synchronized block around the fork.
   private synchronized Process start(ProcessBuilder builder) throws IOException {
     try {
-      return builder.start();
+      return startOnPlatformThread(builder);
     } catch (IOException e) {
       if (e.getMessage().contains("Failed to exec spawn helper")) {
         // Detect permanent failures due to an upgrade of the underlying JDK version,
@@ -149,6 +166,31 @@ public class JavaSubprocessFactory implements SubprocessFactory {
             e);
       }
       throw e;
+    }
+  }
+
+  /**
+   * Starts a subprocess by forking from a long-lived platform thread, which prevents the parent
+   * thread from being killed when using virtual threads.
+   *
+   * <p>A virtual thread forks from its carrier thread. The carrier thread is detached while the
+   * virtual thread waits for the forked process to complete. If there isn't other work for the
+   * carrier thread to do, then it is idle and can be killed due to inactivity. The parent carrier
+   * thread being killed causes the linux-sandbox to die because it self destructs when its parent
+   * dies.
+   *
+   * <p>The default virtual thread scheduler uses a {@link java.util.concurrent.ForkJoinPool} for
+   * its carrier threads with an idle TTL of 30 seconds. Without a long-lived platform thread as
+   * the parent, builds can fail unexpectedly when actions take longer than 30 seconds.
+   */
+  private Process startOnPlatformThread(ProcessBuilder builder) throws IOException {
+    Future<Process> future = forkExecutor.submit(builder::start);
+    try {
+      return Uninterruptibles.getUninterruptibly(future);
+    } catch (ExecutionException e) {
+      Throwables.throwIfInstanceOf(e.getCause(), IOException.class);
+      Throwables.throwIfUnchecked(e.getCause());
+      throw new IllegalStateException("Unexpected error starting subprocess", e.getCause());
     }
   }
 
