@@ -1,50 +1,59 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_URL="${REPO_URL:-https://github.com/lucidsoftware/bazel.git}"
 REPO_DIR="${REPO_DIR:-lucid-bazel}"
 VERSION="${VERSION:-9.2.999}"
 BAZEL_REF="${BAZEL_REF:-${VERSION}}"
-BAZEL_REF_KIND="${BAZEL_REF_KIND:-tag}"
+EXPECTED_COMMIT="${EXPECTED_COMMIT:-7a93b11a481eb44362c5096d2307192c020ff192}"
 BAZELISK_VERSION="${BAZELISK_VERSION:-v1.29.0}"
+BAZELISK_SHA256="${BAZELISK_SHA256:-e20e8b0f4f240091b7a55bf17b9398bd4f40ee70ae0208dff95dd4c445fb4010}"
 BOOTSTRAP_BAZEL_VERSION="${BOOTSTRAP_BAZEL_VERSION:-9.2.0}"
 ARTIFACT="${ARTIFACT:-bazel-${VERSION}-linux-arm64}"
 UPLOAD="${UPLOAD:-0}"
+
+if [[ "${UPLOAD}" != "0" ]]; then
+  echo "ERROR: build and upload are intentionally separate; run the reviewed gh release upload command after backup" >&2
+  exit 1
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required" >&2
   exit 1
 fi
 
+container_arch="$(docker run --rm --platform linux/arm64 ubuntu:22.04 uname -m)"
+if [[ "${container_arch}" != "aarch64" ]]; then
+  echo "ERROR: Ubuntu 22.04 ARM64 container reported ${container_arch}, expected aarch64" >&2
+  exit 1
+fi
+echo "Host architecture: $(uname -m)"
+echo "Container architecture: ${container_arch}"
+
 if [[ ! -d "${REPO_DIR}/.git" ]]; then
   git clone "${REPO_URL}" "${REPO_DIR}"
 fi
 
 cd "${REPO_DIR}"
-case "${BAZEL_REF_KIND}" in
-  branch)
-    if ! git ls-remote --exit-code --heads origin "${BAZEL_REF}" >/dev/null; then
-      echo "ERROR: ${REPO_URL} has no branch named ${BAZEL_REF}" >&2
-      echo "If you intended to build the release tag, rerun with:" >&2
-      echo "  BAZEL_REF_KIND=tag ./build-jammy-arm-bazel.sh" >&2
-      exit 1
-    fi
-    git fetch origin "refs/heads/${BAZEL_REF}:refs/remotes/origin/${BAZEL_REF}"
-    git checkout -B "${BAZEL_REF}" "origin/${BAZEL_REF}"
-    ;;
-  tag)
-    if ! git ls-remote --exit-code --tags origin "refs/tags/${BAZEL_REF}" >/dev/null; then
-      echo "ERROR: ${REPO_URL} has no tag named ${BAZEL_REF}" >&2
-      exit 1
-    fi
-    git fetch origin "refs/tags/${BAZEL_REF}:refs/tags/${BAZEL_REF}"
-    git checkout --detach "${BAZEL_REF}"
-    ;;
-  *)
-    echo "ERROR: BAZEL_REF_KIND must be 'branch' or 'tag', got '${BAZEL_REF_KIND}'" >&2
-    exit 1
-    ;;
-esac
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "ERROR: ${PWD} is not clean; use a fresh scratch directory" >&2
+  exit 1
+fi
+
+remote_commit="$(git ls-remote --exit-code --tags origin "refs/tags/${BAZEL_REF}" | awk "NR == 1 {print \$1}")"
+if [[ "${remote_commit}" != "${EXPECTED_COMMIT}" ]]; then
+  echo "ERROR: tag ${BAZEL_REF} resolves to ${remote_commit}, expected ${EXPECTED_COMMIT}" >&2
+  exit 1
+fi
+git fetch origin "refs/tags/${BAZEL_REF}:refs/tags/${BAZEL_REF}"
+git checkout --detach "${BAZEL_REF}"
+
+actual_commit="$(git rev-parse HEAD)"
+if [[ "${actual_commit}" != "${EXPECTED_COMMIT}" ]]; then
+  echo "ERROR: checked out ${actual_commit}, expected ${EXPECTED_COMMIT}" >&2
+  exit 1
+fi
 
 # Bazel includes the build timestamp in the stamped binary. Use the source
 # commit time by default so rebuilding an architecture does not invalidate
@@ -61,6 +70,7 @@ docker run --rm --platform linux/arm64 \
   -e VERSION="${VERSION}" \
   -e ARTIFACT="${ARTIFACT}" \
   -e BAZELISK_VERSION="${BAZELISK_VERSION}" \
+  -e BAZELISK_SHA256="${BAZELISK_SHA256}" \
   -e BOOTSTRAP_BAZEL_VERSION="${BOOTSTRAP_BAZEL_VERSION}" \
   -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
   -v "${PWD}:/workspace" \
@@ -76,6 +86,7 @@ apt-get install -y --no-install-recommends \
 
 curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/download/${BAZELISK_VERSION}/bazelisk-linux-arm64" \
   -o /usr/local/bin/bazelisk
+echo "${BAZELISK_SHA256}  /usr/local/bin/bazelisk" | sha256sum --check --strict
 chmod +x /usr/local/bin/bazelisk
 
 if ! getent group "${HOST_GID}" >/dev/null; then
@@ -102,14 +113,15 @@ runuser -u "${BUILDER_USER}" -- bash -lc "
     build -c opt --stamp --embed_label \"${VERSION}\" \
     --enable_platform_specific_config \
     --check_direct_dependencies=error \
-    --experimental_downloader_config=bazel_downloader.cfg \
+    --lockfile_mode=off \
+    --downloader_config=bazel_downloader.cfg \
     --cxxopt=-std=c++17 \
     --host_cxxopt=-std=c++17 \
     --per_file_copt=external/.*@-w \
     --host_per_file_copt=external/.*@-w \
-    --java_runtime_version=21 \
+    --java_runtime_version=remotejdk_21 \
     --java_language_version=21 \
-    --tool_java_runtime_version=21 \
+    --tool_java_runtime_version=remotejdk_21 \
     --tool_java_language_version=21 \
     --workspace_status_command=scripts/ci/build_status_command.sh \
     //src:bazel
@@ -117,61 +129,14 @@ runuser -u "${BUILDER_USER}" -- bash -lc "
 "
 '
 
-docker run --rm --platform linux/arm64 \
-  -e VERSION="${VERSION}" \
-  -v "${PWD}:/workspace" \
-  -w /workspace \
-  ubuntu:22.04 bash -lc '
-set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-apt-get update >/dev/null
-apt-get install -y --no-install-recommends binutils file libc6 libstdc++6 unzip >/dev/null
+EXPECTED_VERSION="${VERSION}" "${SCRIPT_DIR}/validate-jammy-arm-bazel.sh" "${PWD}/${ARTIFACT}"
 
-embedded_label="$(unzip -p "'"${ARTIFACT}"'" build-label.txt)"
-if [[ "${embedded_label}" != "${VERSION}" ]]; then
-  echo "ERROR: embedded build label is ${embedded_label}, expected ${VERSION}" >&2
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "ERROR: build changed tracked files in ${PWD}" >&2
   exit 1
 fi
-
-release="$("./'"${ARTIFACT}"'" --batch --output_user_root=/tmp/bazel-validation info release)"
-if [[ "${release}" != "release ${VERSION}" ]]; then
-  echo "ERROR: artifact reports ${release}, expected release ${VERSION}" >&2
-  exit 1
-fi
-
-file "'"${ARTIFACT}"'"
-ldd "'"${ARTIFACT}"'"
-
-echo
-echo "Embedded build label: ${embedded_label}"
-echo "Reported release: ${release}"
-
-echo
-echo "Version requirements from readelf:"
-readelf --version-info "'"${ARTIFACT}"'" | grep -E "GLIBC|GLIBCXX" | sort -Vu
-
-echo
-echo "Version strings:"
-strings "'"${ARTIFACT}"'" | grep -Eo "GLIBC_[0-9.]+|GLIBCXX_[0-9.]+" | sort -Vu
-
-if strings "'"${ARTIFACT}"'" | grep -Eq "GLIBC_2\.38|GLIBCXX_3\.4\.32"; then
-  echo "ERROR: artifact still requires GLIBC_2.38 or GLIBCXX_3.4.32" >&2
-  exit 1
-fi
-'
 
 echo
 echo "Built and validated: ${PWD}/${ARTIFACT}"
 echo "Expected release URL after upload:"
 echo "https://github.com/lucidsoftware/bazel/releases/download/${VERSION}/${ARTIFACT}"
-
-if [[ "${UPLOAD}" == "1" ]]; then
-  if ! command -v gh >/dev/null 2>&1; then
-    echo "gh is required for UPLOAD=1" >&2
-    exit 1
-  fi
-
-  gh release upload "${VERSION}" "${ARTIFACT}" \
-    --repo lucidsoftware/bazel \
-    --clobber
-fi
