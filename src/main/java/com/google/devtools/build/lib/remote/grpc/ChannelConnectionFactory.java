@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.remote.grpc;
 
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 import io.grpc.CallOptions;
@@ -46,16 +47,24 @@ public interface ChannelConnectionFactory extends ConnectionFactory {
 
     @Override
     public void close() throws IOException {
-      // Clear interrupted status to prevent failure to await, indicated with #13512
+      // Finish channel shutdown even if interrupted, then restore the interrupted status (#13512).
       boolean wasInterrupted = Thread.interrupted();
       // There is a bug (b/183340374) in gRPC that client doesn't try to close connections with
       // shutdown() if the channel received GO_AWAY frames. Using shutdownNow() here as a
       // workaround.
       try {
         channel.shutdownNow();
-        channel.awaitTermination(Integer.MAX_VALUE, SECONDS);
-      } catch (InterruptedException e) {
-        throw new IOException(e.getMessage(), e);
+        long remainingNanos = SECONDS.toNanos(Integer.MAX_VALUE);
+        long deadlineNanos = System.nanoTime() + remainingNanos;
+        while (remainingNanos > 0) {
+          try {
+            channel.awaitTermination(remainingNanos, NANOSECONDS);
+            break;
+          } catch (InterruptedException e) {
+            wasInterrupted = true;
+            remainingNanos = deadlineNanos - System.nanoTime();
+          }
+        }
       } finally {
         if (wasInterrupted) {
           Thread.currentThread().interrupt();
